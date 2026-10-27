@@ -23,6 +23,7 @@ mod hmac;
 mod poly1305;
 mod scalar;
 mod sha2;
+mod sha3;
 mod x25519;
 
 pub use aead::{aead_open, aead_seal, ct_eq};
@@ -32,6 +33,7 @@ pub use hkdf::{derive_key_sha512, expand_sha256, expand_sha512, extract_sha256, 
 pub use hmac::{Hmac256, Hmac512, hmac_sha256, hmac_sha512};
 pub use poly1305::{Poly1305, poly1305};
 pub use sha2::{Sha256, Sha512, sha256, sha512};
+pub use sha3::{sha3_256, sha3_512, shake128, shake256};
 pub use x25519::{x25519, x25519_base};
 
 /// The RFC 8439 sample message, used by two of the vectors (§2.4.2, §2.8).
@@ -44,6 +46,7 @@ const SAMPLE: &[u8; 114] =
 /// correct, not a smoke test.
 pub fn self_test() -> bool {
     sha2_ok()
+        && sha3_ok()
         && hmac_ok()
         && hkdf_ok()
         && chacha_ok()
@@ -51,6 +54,49 @@ pub fn self_test() -> bool {
         && aead_ok()
         && x25519_ok()
         && ed25519_ok()
+}
+
+/// SHA-3 and SHAKE against FIPS 202 known-answer vectors.
+fn sha3_ok() -> bool {
+    // SHA3-256("") and SHA3-256("abc").
+    let empty256 = [
+        0xa7, 0xff, 0xc6, 0xf8, 0xbf, 0x1e, 0xd7, 0x66, 0x51, 0xc1, 0x47, 0x56, 0xa0, 0x61, 0xd6,
+        0x62, 0xf5, 0x80, 0xff, 0x4d, 0xe4, 0x3b, 0x49, 0xfa, 0x82, 0xd8, 0x0a, 0x4b, 0x80, 0xf8,
+        0x43, 0x4a,
+    ];
+    let abc256 = [
+        0x3a, 0x98, 0x5d, 0xa7, 0x4f, 0xe2, 0x25, 0xb2, 0x04, 0x5c, 0x17, 0x2d, 0x6b, 0xd3, 0x90,
+        0xbd, 0x85, 0x5f, 0x08, 0x6e, 0x3e, 0x9d, 0x52, 0x5b, 0x46, 0xbf, 0xe2, 0x45, 0x11, 0x43,
+        0x15, 0x32,
+    ];
+    // SHA3-512("abc").
+    let abc512 = [
+        0xb7, 0x51, 0x85, 0x0b, 0x1a, 0x57, 0x16, 0x8a, 0x56, 0x93, 0xcd, 0x92, 0x4b, 0x6b, 0x09,
+        0x6e, 0x08, 0xf6, 0x21, 0x82, 0x74, 0x44, 0xf7, 0x0d, 0x88, 0x4f, 0x5d, 0x02, 0x40, 0xd2,
+        0x71, 0x2e, 0x10, 0xe1, 0x16, 0xe9, 0x19, 0x2a, 0xf3, 0xc9, 0x1a, 0x7e, 0xc5, 0x76, 0x47,
+        0xe3, 0x93, 0x40, 0x57, 0x34, 0x0b, 0x4c, 0xf4, 0x08, 0xd5, 0xa5, 0x65, 0x92, 0xf8, 0x27,
+        0x4e, 0xec, 0x53, 0xf0,
+    ];
+    // SHAKE128("") and SHAKE256(""), first 32 bytes.
+    let shake128_empty = [
+        0x7f, 0x9c, 0x2b, 0xa4, 0xe8, 0x8f, 0x82, 0x7d, 0x61, 0x60, 0x45, 0x50, 0x76, 0x05, 0x85,
+        0x3e, 0xd7, 0x3b, 0x80, 0x93, 0xf6, 0xef, 0xbc, 0x88, 0xeb, 0x1a, 0x6e, 0xac, 0xfa, 0x66,
+        0xef, 0x26,
+    ];
+    let shake256_empty = [
+        0x46, 0xb9, 0xdd, 0x2b, 0x0b, 0xa8, 0x8d, 0x13, 0x23, 0x3b, 0x3f, 0xeb, 0x74, 0x3e, 0xeb,
+        0x24, 0x3f, 0xcd, 0x52, 0xea, 0x62, 0xb8, 0x1b, 0x82, 0xb5, 0x0c, 0x27, 0x64, 0x6e, 0xd5,
+        0x76, 0x2f,
+    ];
+
+    if sha3_256(b"") != empty256 || sha3_256(b"abc") != abc256 || sha3_512(b"abc") != abc512 {
+        return false;
+    }
+    let mut out128 = [0u8; 32];
+    shake128(b"", &mut out128);
+    let mut out256 = [0u8; 32];
+    shake256(b"", &mut out256);
+    out128 == shake128_empty && out256 == shake256_empty
 }
 
 /// HKDF-SHA-256, RFC 5869 test case 1 (the construction is the same for
@@ -277,6 +323,27 @@ mod tests {
             0x78, 0x52, 0xb8, 0x55,
         ];
         assert_eq!(sha256(b""), want);
+    }
+
+    #[test]
+    fn shake_is_a_consistent_stream_across_blocks() {
+        // A SHAKE output longer than the rate (SHAKE128's rate is 168
+        // bytes) must be a prefix-consistent stream: asking for more only
+        // extends it. This exercises the squeeze's permute-between-blocks
+        // path, which the 32-byte self-test vectors don't reach.
+        let msg = b"the keep stands";
+        let mut short = [0u8; 168];
+        let mut long = [0u8; 400];
+        shake128(msg, &mut short);
+        shake128(msg, &mut long);
+        assert_eq!(&long[..168], &short[..]);
+        // The absorb side too: a message longer than the rate.
+        let big = [0x5au8; 500];
+        let mut a = [0u8; 64];
+        let mut b = [0u8; 32];
+        shake256(&big, &mut a);
+        shake256(&big, &mut b);
+        assert_eq!(&a[..32], &b[..]);
     }
 
     fn hex(s: &str) -> [u8; 32] {

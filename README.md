@@ -99,8 +99,8 @@ The first layer of Rook's security architecture: a `no_std`,
 forbid-unsafe library written from the specifications, since Rook vendors
 no crates.
 
-- **SHA-256 and SHA-512** (FIPS 180-4), **HMAC** over both (RFC 2104), and
-  **HKDF** (RFC 5869).
+- **SHA-256 and SHA-512** (FIPS 180-4), **SHA3-256/512 and SHAKE128/256**
+  (FIPS 202), **HMAC** (RFC 2104) and **HKDF** (RFC 5869).
 - **ChaCha20**, **Poly1305**, and the **ChaCha20-Poly1305 AEAD**
   (RFC 8439).
 - **X25519** Diffie-Hellman (RFC 7748) and **Ed25519** signatures
@@ -229,7 +229,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
 | `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
-| `crypto/` | Rook's cryptography, from the specs: SHA-2, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, verified against the official vectors. No `unsafe`, no external crates |
+| `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
