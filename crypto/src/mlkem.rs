@@ -1,8 +1,9 @@
-//! ML-KEM-768 (FIPS 203): the module-lattice key-encapsulation mechanism,
-//! the post-quantum half of Rook's hybrid key exchange.
+//! ML-KEM-1024 (FIPS 203): the module-lattice key-encapsulation mechanism,
+//! the post-quantum half of Rook's hybrid key exchange. The design doc
+//! calls for the 1024 parameter set, the most conservative one.
 //!
-//! This follows FIPS 203 for the ML-KEM-768 parameter set (k = 3, η = 2,
-//! d_u = 10, d_v = 4) over the ring Z_q[X]/(X^256 + 1), q = 3329. The
+//! This follows FIPS 203 for the ML-KEM-1024 parameter set (k = 4, η = 2,
+//! d_u = 11, d_v = 5) over the ring Z_q[X]/(X^256 + 1), q = 3329. The
 //! number-theoretic transform, Montgomery/Barrett reductions and the
 //! sampling follow the well-trodden reference arithmetic; the hashing and
 //! the Fujisaki–Okamoto transform follow the standard (G = SHA3-512,
@@ -19,23 +20,23 @@ use crate::sha3::{Shake128Reader, sha3_256, sha3_512, shake256};
 
 const N: usize = 256;
 const Q: i32 = 3329;
-const K: usize = 3;
+const K: usize = 4;
 const ETA: usize = 2;
-// Compression widths d_u = 10 and d_v = 4 are baked into the pack/unpack
-// routines (the 0x3ff and 0xf masks and the byte counts below).
+// Compression widths d_u = 11 and d_v = 5 are baked into the pack/unpack
+// routines (the 0x7ff and 0x1f masks and the byte counts below).
 
 const SYM: usize = 32;
 const POLYBYTES: usize = 384; // 256 coefficients, 12 bits each
-const POLYVECBYTES: usize = K * POLYBYTES; // 1152
-const POLYCOMPRESSED: usize = 128; // d_v = 4: 256 * 4 / 8
-const POLYVECCOMPRESSED: usize = K * 320; // d_u = 10: K * 256 * 10 / 8 = 960
+const POLYVECBYTES: usize = K * POLYBYTES; // 1536
+const POLYCOMPRESSED: usize = 160; // d_v = 5: 256 * 5 / 8
+const POLYVECCOMPRESSED: usize = K * 352; // d_u = 11: K * 256 * 11 / 8 = 1408
 
 /// Encapsulation-key length (the public key).
-pub const EK_LEN: usize = POLYVECBYTES + SYM; // 1184
+pub const EK_LEN: usize = POLYVECBYTES + SYM; // 1568
 /// Decapsulation-key length (the private key).
-pub const DK_LEN: usize = POLYVECBYTES + EK_LEN + 2 * SYM; // 2400
+pub const DK_LEN: usize = POLYVECBYTES + EK_LEN + 2 * SYM; // 3168
 /// Ciphertext length.
-pub const CT_LEN: usize = POLYVECCOMPRESSED + POLYCOMPRESSED; // 1088
+pub const CT_LEN: usize = POLYVECCOMPRESSED + POLYCOMPRESSED; // 1568
 /// Shared-secret length.
 pub const SS_LEN: usize = 32;
 
@@ -308,63 +309,100 @@ fn polyvec_frombytes(a: &[u8]) -> [Poly; K] {
     v
 }
 
-/// Compress and pack a vector at d_u = 10 bits (960 bytes).
+/// Compress and pack a vector at d_u = 11 bits (8 coefficients per 11
+/// bytes; 352 bytes per polynomial). The packing works in `u32` so the
+/// left shifts of 11-bit values never overflow before truncation.
 fn polyvec_compress(v: &[Poly; K], out: &mut [u8]) {
     let mut off = 0;
     for vi in v.iter() {
-        for j in 0..N / 4 {
-            let mut t = [0u16; 4];
+        for j in 0..N / 8 {
+            let mut t = [0u32; 8];
             for (k, slot) in t.iter_mut().enumerate() {
-                let x = freeze(vi[4 * j + k]) as u32;
-                *slot = ((((x << 10) + (Q as u32 / 2)) / Q as u32) & 0x3ff) as u16;
+                let x = freeze(vi[8 * j + k]) as u32;
+                *slot = (((x << 11) + (Q as u32 / 2)) / Q as u32) & 0x7ff;
             }
             out[off] = t[0] as u8;
-            out[off + 1] = ((t[0] >> 8) | (t[1] << 2)) as u8;
-            out[off + 2] = ((t[1] >> 6) | (t[2] << 4)) as u8;
-            out[off + 3] = ((t[2] >> 4) | (t[3] << 6)) as u8;
-            out[off + 4] = (t[3] >> 2) as u8;
-            off += 5;
+            out[off + 1] = ((t[0] >> 8) | (t[1] << 3)) as u8;
+            out[off + 2] = ((t[1] >> 5) | (t[2] << 6)) as u8;
+            out[off + 3] = (t[2] >> 2) as u8;
+            out[off + 4] = ((t[2] >> 10) | (t[3] << 1)) as u8;
+            out[off + 5] = ((t[3] >> 7) | (t[4] << 4)) as u8;
+            out[off + 6] = ((t[4] >> 4) | (t[5] << 7)) as u8;
+            out[off + 7] = (t[5] >> 1) as u8;
+            out[off + 8] = ((t[5] >> 9) | (t[6] << 2)) as u8;
+            out[off + 9] = ((t[6] >> 6) | (t[7] << 5)) as u8;
+            out[off + 10] = (t[7] >> 3) as u8;
+            off += 11;
         }
     }
 }
 
-/// Decompress a d_u = 10 vector.
+/// Decompress a d_u = 11 vector.
 fn polyvec_decompress(a: &[u8]) -> [Poly; K] {
     let mut v = [ZERO; K];
     let mut off = 0;
     for vi in v.iter_mut() {
-        for j in 0..N / 4 {
+        for j in 0..N / 8 {
+            let b = |n: usize| a[off + n] as u32;
             let t = [
-                (a[off] as u16) | ((a[off + 1] as u16) << 8),
-                ((a[off + 1] as u16) >> 2) | ((a[off + 2] as u16) << 6),
-                ((a[off + 2] as u16) >> 4) | ((a[off + 3] as u16) << 4),
-                ((a[off + 3] as u16) >> 6) | ((a[off + 4] as u16) << 2),
+                b(0) | (b(1) << 8),
+                (b(1) >> 3) | (b(2) << 5),
+                (b(2) >> 6) | (b(3) << 2) | (b(4) << 10),
+                (b(4) >> 1) | (b(5) << 7),
+                (b(5) >> 4) | (b(6) << 4),
+                (b(6) >> 7) | (b(7) << 1) | (b(8) << 9),
+                (b(8) >> 2) | (b(9) << 6),
+                (b(9) >> 5) | (b(10) << 3),
             ];
             for (k, &tk) in t.iter().enumerate() {
-                let c = (tk & 0x3ff) as u32;
-                vi[4 * j + k] = ((c * Q as u32 + 512) >> 10) as i16;
+                let c = tk & 0x7ff;
+                vi[8 * j + k] = ((c * Q as u32 + 1024) >> 11) as i16;
             }
-            off += 5;
+            off += 11;
         }
     }
     v
 }
 
-/// Compress and pack a polynomial at d_v = 4 bits (128 bytes).
+/// Compress and pack a polynomial at d_v = 5 bits (8 coefficients per 5
+/// bytes; 160 bytes), again packing in `u32`.
 fn poly_compress(a: &Poly, out: &mut [u8]) {
-    for i in 0..N / 2 {
-        let t0 = ((((freeze(a[2 * i]) as u32) << 4) + (Q as u32 / 2)) / Q as u32) & 0xf;
-        let t1 = ((((freeze(a[2 * i + 1]) as u32) << 4) + (Q as u32 / 2)) / Q as u32) & 0xf;
-        out[i] = (t0 | (t1 << 4)) as u8;
+    let mut off = 0;
+    for i in 0..N / 8 {
+        let mut t = [0u32; 8];
+        for (j, slot) in t.iter_mut().enumerate() {
+            let x = freeze(a[8 * i + j]) as u32;
+            *slot = (((x << 5) + (Q as u32 / 2)) / Q as u32) & 0x1f;
+        }
+        out[off] = (t[0] | (t[1] << 5)) as u8;
+        out[off + 1] = ((t[1] >> 3) | (t[2] << 2) | (t[3] << 7)) as u8;
+        out[off + 2] = ((t[3] >> 1) | (t[4] << 4)) as u8;
+        out[off + 3] = ((t[4] >> 4) | (t[5] << 1) | (t[6] << 6)) as u8;
+        out[off + 4] = ((t[6] >> 2) | (t[7] << 3)) as u8;
+        off += 5;
     }
 }
 
-/// Decompress a d_v = 4 polynomial.
+/// Decompress a d_v = 5 polynomial.
 fn poly_decompress(a: &[u8]) -> Poly {
     let mut r = ZERO;
-    for i in 0..N / 2 {
-        r[2 * i] = (((a[i] & 0xf) as u32 * Q as u32 + 8) >> 4) as i16;
-        r[2 * i + 1] = (((a[i] >> 4) as u32 * Q as u32 + 8) >> 4) as i16;
+    let mut off = 0;
+    for i in 0..N / 8 {
+        let b = |n: usize| a[off + n] as u32;
+        let t = [
+            b(0),
+            (b(0) >> 5) | (b(1) << 3),
+            b(1) >> 2,
+            (b(1) >> 7) | (b(2) << 1),
+            (b(2) >> 4) | (b(3) << 4),
+            b(3) >> 1,
+            (b(3) >> 6) | (b(4) << 2),
+            b(4) >> 3,
+        ];
+        for (j, &tj) in t.iter().enumerate() {
+            r[8 * i + j] = (((tj & 0x1f) * Q as u32 + 16) >> 5) as i16;
+        }
+        off += 5;
     }
     r
 }

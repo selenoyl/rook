@@ -50,7 +50,7 @@ pub const MSG2_LEN: usize = X_PUB + MLKEM_CT_LEN + SEALED;
 pub const MSG3_LEN: usize = SEALED;
 
 /// Domain-separation label mixed into the transcript hash. v2 is the
-/// hybrid X25519 + ML-KEM-768 handshake.
+/// hybrid X25519 + ML-KEM-1024 handshake.
 const PROTO: &[u8] = b"rook-drawbridge-v2-hybrid";
 /// Role labels prefixed to the signed transcript, so a responder's
 /// signature can never be replayed as an initiator's, or the reverse.

@@ -1,4 +1,4 @@
-//! ML-KEM-768 tests, pinned to the NIST ACVP (FIPS 203) known-answer
+//! ML-KEM-1024 tests, pinned to the NIST ACVP (FIPS 203) known-answer
 //! vectors. The full encapsulation/decapsulation key and ciphertext come
 //! from the vectors as binary files; the seeds and expected hashes are
 //! inline.
@@ -20,21 +20,21 @@ fn unhex<const L: usize>(s: &str) -> [u8; L] {
     out
 }
 
-// NIST ACVP ML-KEM-768 keyGen test: (d, z) -> (ek, dk).
-const KG_D: &str = "e582b7d75e6c80b05ae392a1fc9f7153b12390fd99930368cc67a768baebc8a0";
-const KG_Z: &str = "1cdacb8740c0b87c4a379575f187b367cbfa3b300bf591b109f79816e9cbe8f0";
-const KG_EK_HASH: &str = "81e66ef5a7a221619f6a64039cc369843e10df5c859f6959cc3fd8e5272330fd";
-const KG_DK_HASH: &str = "be81068c104cd6cf8efd800b294f4a15bb8a8050993fd54a2cc428841ef6ca44";
+// NIST ACVP ML-KEM-1024 keyGen test: (d, z) -> (ek, dk).
+const KG_D: &str = "f3a706faf090c03db506863ab0b20bd8a1627956318e88c67eb875e8e7266009";
+const KG_Z: &str = "35d2bc43dd1cc879f765bf2a0c5e297889dde910e57e2bb0eae417b90ab7a275";
+const KG_EK_HASH: &str = "9370fe5b05ddc92c939f62cbde4c0fea36f45cd20c5748cf3ac891a4c2604496";
+const KG_DK_HASH: &str = "b8c683c71564ff8e2391c57b68c3a1ff186734b13e31d2a075b65307c8b80888";
 
-// NIST ACVP ML-KEM-768 encapsulation test: (ek, m) -> (c, k). The key and
+// NIST ACVP ML-KEM-1024 encapsulation test: (ek, m) -> (c, k). The key and
 // ciphertext are the binary files; m, k and the ciphertext's hash inline.
-const ED_M: &str = "4e77596168711e913965d8175ac3bd76aab08b7f9385a02ae883cf6c6e17dd81";
-const ED_K: &str = "79d74f6c6c2d916bec47bd828fd9b67295a37f54927fab1263c0d122f1c6f1ed";
-const ED_CT_HASH: &str = "684da17d93e27520cb78ae6169c020d73ef770e6fa89589cc7d653a76a8b1751";
+const ED_M: &str = "2f1e2ca7bd72af847cac38cdefc4d345909d7517543edf32e2fc491ba05eb5c3";
+const ED_K: &str = "5087e3b0c90bf601dd6501e071270eff8683621e9f5d67a7a668e50c4f460a75";
+const ED_CT_HASH: &str = "866618b1b8d52ceefeb503b91d01b060c37cbe452ee912277b4978a030d20172";
 
-const ACVP_EK: &[u8; EK_LEN] = include_bytes!("../../testdata/mlkem768_ek.bin");
-const ACVP_DK: &[u8; DK_LEN] = include_bytes!("../../testdata/mlkem768_dk.bin");
-const ACVP_CT: &[u8; CT_LEN] = include_bytes!("../../testdata/mlkem768_ct.bin");
+const ACVP_EK: &[u8; EK_LEN] = include_bytes!("../../testdata/mlkem1024_ek.bin");
+const ACVP_DK: &[u8; DK_LEN] = include_bytes!("../../testdata/mlkem1024_dk.bin");
+const ACVP_CT: &[u8; CT_LEN] = include_bytes!("../../testdata/mlkem1024_ct.bin");
 
 #[test]
 fn keygen_matches_nist() {

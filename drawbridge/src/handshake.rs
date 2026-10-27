@@ -11,7 +11,7 @@
 //! ```
 //!
 //! `e_*` are ephemeral X25519 public keys; `mlkem_ek`/`mlkem_ct` are an
-//! ephemeral ML-KEM-768 encapsulation key and the ciphertext encapsulated
+//! ephemeral ML-KEM-1024 encapsulation key and the ciphertext encapsulated
 //! to it. The agreed key is derived from **both** the X25519 secret and
 //! the ML-KEM secret, so an attacker must break classical *and*
 //! post-quantum problems. `id_*` are Ed25519 identity keys and `sig_*`

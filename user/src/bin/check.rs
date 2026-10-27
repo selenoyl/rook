@@ -131,7 +131,7 @@ fn run_checks() -> Result<(), &'static str> {
     // computed here in ring 3.
     expect(crypto::self_test(), "cryptography known-answer vectors")?;
     let _ = user::log(
-        "crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, ML-DSA-87, SLH-DSA verified",
+        "crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA verified",
     );
 
     // Drawbridge: a full handshake and sealed exchange, in ring 3.
