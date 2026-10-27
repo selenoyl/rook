@@ -1,0 +1,17 @@
+[package]
+name = "keep"
+description = "The Keep: Rook's microkernel"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+abi = { path = "../abi" }
+
+[[bin]]
+name = "keep"
+test = false
+bench = false
+
+[lints]
+workspace = true

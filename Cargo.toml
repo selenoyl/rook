@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["abi", "crypto", "keep", "user"]
+
+[workspace.package]
+version = "0.6.0"
+edition = "2024"
+
+# Engineering rules: integer overflow never wraps silently, panics abort,
+# and release builds are fully optimized as one unit.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = true
+
+[workspace.lints.rust]
+# unsafe is allowed only in named low-level modules (see UNSAFE.md).
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"

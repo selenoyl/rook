@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+# The Keep is linked at a fixed low address and entered from 32-bit
+# boot code, so it is built without position independence.
+rustflags = ["-C", "relocation-model=static"]

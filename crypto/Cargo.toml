@@ -1,0 +1,13 @@
+[package]
+name = "crypto"
+description = "Rook's cryptography, written from the specifications and verified against the official test vectors"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[lints]
+workspace = true

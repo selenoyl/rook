@@ -1,0 +1,13 @@
+[package]
+name = "abi"
+description = "The system call interface between the Keep and user programs"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = false
+bench = false
+
+[lints]
+workspace = true

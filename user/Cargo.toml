@@ -1,0 +1,27 @@
+[package]
+name = "user"
+description = "Rook's first user programs: Michael, and the test program check"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+abi = { path = "../abi" }
+crypto = { path = "../crypto" }
+
+[lib]
+test = false
+bench = false
+
+[[bin]]
+name = "michael"
+test = false
+bench = false
+
+[[bin]]
+name = "check"
+test = false
+bench = false
+
+[lints]
+workspace = true
