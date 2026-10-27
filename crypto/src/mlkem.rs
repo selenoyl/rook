@@ -15,6 +15,14 @@
 //! the random seeds (`d`, `z`, `m`), so this is pure and testable, and the
 //! KATs pin it to the NIST vectors. Like the rest of `crypto`, it is not
 //! audited.
+//!
+//! A deliberate divergence from the design doc: the doc asks that ML-KEM
+//! come from a formally verified implementation (such as Cryspen's
+//! libcrux), never hand-written. Rook's no-external-crates rule rules that
+//! out for now, so this is written from FIPS 203 like the rest of `crypto`.
+//! It is pinned to the NIST vectors, but it carries no formal-verification
+//! guarantee; a real deployment should swap in a verified implementation or
+//! have this one audited. The doc budgets exactly that audit.
 
 use crate::sha3::{Shake128Reader, sha3_256, sha3_512, shake256};
 
