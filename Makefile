@@ -33,7 +33,7 @@ run: build
 check:
 	cargo fmt --check
 	cargo clippy --release -- -D warnings
-	cargo test -p crypto -p drawbridge --target x86_64-unknown-linux-gnu
+	cargo test -p crypto -p drawbridge -p vault --target x86_64-unknown-linux-gnu
 	python3 tools/check.py
 
 test: build check

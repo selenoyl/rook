@@ -15,7 +15,7 @@ import re
 import sys
 
 # Rust crates to check, and where each one is allowed to use `unsafe`.
-CRATES = ["keep/src", "user/src", "abi/src", "crypto/src", "drawbridge/src"]
+CRATES = ["keep/src", "user/src", "abi/src", "crypto/src", "drawbridge/src", "vault/src"]
 LOW_LEVEL = ["keep/src/arch", "user/src/sys.rs"]
 # The line budget covers the Keep only.
 BUDGET_DIR = "keep/src"

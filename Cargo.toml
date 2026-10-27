@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["abi", "crypto", "drawbridge", "keep", "user"]
+members = ["abi", "crypto", "drawbridge", "keep", "user", "vault"]
 
 [workspace.package]
 version = "0.7.0"

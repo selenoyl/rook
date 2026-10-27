@@ -1,0 +1,13 @@
+[package]
+name = "vault"
+description = "The Vault: Rook's simple on-disk filesystem, over a block device"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[lints]
+workspace = true
