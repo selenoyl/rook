@@ -145,6 +145,16 @@ fn run_checks() -> Result<(), &'static str> {
         refused(user::send(ABSENT_HANDLE, [0; 4]), Error::BadCapability),
         "using a handle with no Writ is refused",
     )?;
+    // The I/O capability is enforced: this task holds no I/O Writ, so it
+    // cannot touch a device port — the ATA command port here.
+    expect(
+        refused(user::io_in(TO_SUPERVISOR, 0x1f7), Error::BadCapability),
+        "port I/O without an I/O Writ is refused",
+    )?;
+    expect(
+        refused(user::io_out(ABSENT_HANDLE, 0x1f7, 0), Error::BadCapability),
+        "writing a device port without an I/O Writ is refused",
+    )?;
 
     // Message passing, for real: run a Drawbridge handshake with the
     // supervisor over the two endpoints, then trade a sealed message.
