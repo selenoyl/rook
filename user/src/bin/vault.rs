@@ -38,8 +38,16 @@ fn main(_: u64) -> ! {
 
 /// Bring up the disk and mount the filesystem, logging what's there.
 fn mount() -> Option<Vault<Ata>> {
-    match Ata::open(DISK).map(Vault::open) {
-        Some(Ok(mut fs)) => {
+    let mut ata = match Ata::open(DISK) {
+        Some(ata) => ata,
+        None => {
+            let _ = user::log("no disk on the ATA bus");
+            return None;
+        }
+    };
+    disk_self_test(&mut ata);
+    match Vault::open(ata) {
+        Ok(mut fs) => {
             user::logln!(
                 "disk {} blocks, filesystem has {} file(s), {} blocks free",
                 fs.blocks(),
@@ -52,15 +60,35 @@ fn mount() -> Option<Vault<Ata>> {
             report_motd(&mut fs);
             Some(fs)
         }
-        Some(Err(_)) => {
+        Err(_) => {
             let _ = user::log("disk found, but it holds no Vault filesystem");
             None
         }
-        None => {
-            let _ = user::log("no disk on the ATA bus");
-            None
-        }
     }
+}
+
+/// Prove the ATA write path works: write a known pattern to a scratch
+/// block past the filesystem and read it back. The block is fixed, so this
+/// is the same every boot and never disturbs the filesystem's blocks.
+fn disk_self_test(ata: &mut Ata) {
+    use vault::BlockDevice;
+    let scratch = ata.blocks().saturating_sub(1);
+    if scratch == 0 {
+        return;
+    }
+    let mut pattern = [0u8; vault::BLOCK];
+    for (i, b) in pattern.iter_mut().enumerate() {
+        *b = (i as u8) ^ 0xa5;
+    }
+    let mut back = [0u8; vault::BLOCK];
+    let ok = ata.write_block(scratch, &pattern).is_ok()
+        && ata.read_block(scratch, &mut back).is_ok()
+        && back == pattern;
+    let _ = user::log(if ok {
+        "disk: write and read-back verified"
+    } else {
+        "disk: write/read-back FAILED"
+    });
 }
 
 /// Open a Drawbridge session with the client, then answer sealed file

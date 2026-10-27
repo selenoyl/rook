@@ -42,6 +42,7 @@ CASES = [
             "[check] drawbridge over IPC: sealed channel with the supervisor",
             "[michael] drawbridge: authenticated task 2, opened its sealed report",
             "[michael] task 2 is alive and well",
+            "[vault] disk: write and read-back verified",
             "[vault] disk 256 blocks, filesystem has 3 file(s), 252 blocks free",
             "[vault] motd: The Keep holds. Rook stands watch.",
             "[vault] drawbridge: secure channel open with the client",
