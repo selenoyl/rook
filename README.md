@@ -3,18 +3,33 @@
 Rook is a from-scratch, security-first operating system and network
 protocol, written in Rust. The design lives in the
 [Rook: Security & Design Principles](https://claude.ai/artifact/Ddf9ZD5sMHLMDQuUsa73kh)
-doc. This repository starts with the Keep, Rook's microkernel, as an
-x86-64 kernel running in QEMU, with its first programs running in ring 3
-and talking to each other through the Keep.
+doc. This repository is the Keep, Rook's microkernel, running as an x86-64
+kernel in QEMU, with its programs in ring 3 talking to each other and to
+the hardware only through the Keep.
 
-The Keep does everything the design asks a microkernel to do privileged
-— **scheduling, memory, interrupts, and message passing** — and gates it
-all with **Writs** (capabilities). On top of it, the security
-architecture has begun: a from-scratch **cryptography** library, checked
-against the official test vectors. The angels, Drawbridge and the network
-are built from here, as user programs.
+What runs today:
 
-## What the Keep does today (v0.6)
+- A **microkernel** that keeps only scheduling, memory, interrupts and
+  message passing privileged, and gates everything with **Writs**
+  (capabilities): endpoints to talk to another task, a Task Writ to watch
+  one, an I/O Writ to drive a device.
+- **Ring-3 isolation** with W^X, guard pages, SMEP/SMAP/UMIP, a strict ELF
+  loader and fail-closed traps; a faulting task is reaped and the Keep
+  carries on.
+- A from-scratch, KAT-verified **cryptography** library — SHA-2, SHA-3,
+  HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519 and **ML-KEM-768**
+  (post-quantum) — plus a ChaCha20 **CSPRNG** seeded from the CPU.
+- **Drawbridge**, a hybrid **X25519 + ML-KEM-768** authenticated session,
+  running between two ring-3 tasks over the Keep's message passing.
+- The **Vault**, a storage service: an ATA driver and a filesystem in ring
+  3, reaching the disk only through an I/O Writ and serving files to other
+  tasks over an endpoint.
+
+Everything here is `#![forbid(unsafe_code)]` except two named low-level
+modules, builds with no external crates, and is covered by host unit tests
+and headless QEMU boot tests.
+
+## What the Keep does today (v0.8)
 
 - Boots as a Multiboot kernel. A short assembly trampoline clears .bss,
   maps the first GiB twice (identity, and the higher half at
