@@ -37,7 +37,7 @@ CASES = [
             "[check] running in ring 3",
             "[keep] entropy: CSPRNG seeded from the CPU (RDSEED)",
             "[check] entropy: random bytes drawn from the Keep, and they differ",
-            "[check] crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, SLH-DSA verified",
+            "[check] crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, ML-DSA-87, SLH-DSA verified",
             "[check] drawbridge: authenticated session established and verified",
             "[check] drawbridge over IPC: sealed channel with the supervisor",
             "[michael] drawbridge: authenticated task 2, opened its sealed report",

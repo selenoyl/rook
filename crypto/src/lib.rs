@@ -7,9 +7,11 @@
 //! have not been audited, so nothing here protects anything real until it
 //! has been. The design doc budgets that audit.
 //!
-//! What's here: SHA-256 and SHA-512, HMAC over both, HKDF, ChaCha20,
-//! Poly1305, the ChaCha20-Poly1305 AEAD, X25519 key exchange and Ed25519
-//! signatures. Drawbridge's session protocol is built from these.
+//! What's here: SHA-256/512, SHA-3 and SHAKE, HMAC over both, HKDF,
+//! ChaCha20, Poly1305 and the ChaCha20-Poly1305 AEAD; X25519 key exchange
+//! and Ed25519 signatures; and the post-quantum trio ML-KEM (key
+//! encapsulation), ML-DSA and SLH-DSA (signatures). Drawbridge's session
+//! protocol is built from these.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -20,6 +22,7 @@ mod ed25519;
 mod field25519;
 mod hkdf;
 mod hmac;
+mod mldsa;
 mod mlkem;
 mod poly1305;
 mod scalar;
@@ -33,6 +36,10 @@ pub use chacha::chacha20_xor;
 pub use ed25519::{public_key, sign, verify};
 pub use hkdf::{derive_key_sha512, expand_sha256, expand_sha512, extract_sha256, extract_sha512};
 pub use hmac::{Hmac256, Hmac512, hmac_sha256, hmac_sha512};
+pub use mldsa::{
+    MLDSA_PK_LEN, MLDSA_SIG_LEN, MLDSA_SK_LEN, keygen as mldsa_keygen,
+    public_from_secret as mldsa_public_from_secret, sign as mldsa_sign, verify as mldsa_verify,
+};
 pub use mlkem::{
     CT_LEN as MLKEM_CT_LEN, DK_LEN as MLKEM_DK_LEN, EK_LEN as MLKEM_EK_LEN, SS_LEN as MLKEM_SS_LEN,
     decaps as mlkem_decaps, encaps as mlkem_encaps, keygen as mlkem_keygen,
@@ -65,7 +72,26 @@ pub fn self_test() -> bool {
         && x25519_ok()
         && ed25519_ok()
         && mlkem_ok()
+        && mldsa_ok()
         && slhdsa_ok()
+}
+
+/// ML-DSA-87 verify against a NIST ACVP (FIPS 204) vector: recompute the
+/// public key from the secret key, confirm the official signature
+/// verifies, and confirm a tampered key rejects it. Signing and key
+/// generation are pinned to the vectors by the host tests.
+fn mldsa_ok() -> bool {
+    const SK: &[u8; MLDSA_SK_LEN] = include_bytes!("../testdata/mldsa87_sk.bin");
+    const MSG: &[u8] = include_bytes!("../testdata/mldsa87_msg.bin");
+    const SIG: &[u8] = include_bytes!("../testdata/mldsa87_sig.bin");
+
+    let pk = mldsa_public_from_secret(SK);
+    if !mldsa_verify(MSG, SIG, &pk) {
+        return false;
+    }
+    let mut wrong = pk;
+    wrong[0] ^= 1;
+    !mldsa_verify(MSG, SIG, &wrong)
 }
 
 /// SLH-DSA-SHAKE-128f verify against a NIST ACVP (FIPS 205) vector: the

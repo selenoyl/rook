@@ -220,6 +220,31 @@ impl Shake128Reader {
     }
 }
 
+/// A SHAKE256 reader for squeezing a block at a time. ML-DSA's rejection
+/// samplers (secret vectors and the challenge) draw an unbounded number of
+/// bytes, so they squeeze fresh blocks on demand rather than guessing a
+/// buffer size in advance.
+pub struct Shake256Reader {
+    a: [u64; 25],
+}
+
+impl Shake256Reader {
+    /// Start a SHAKE256 reader over `input`.
+    pub fn new(input: &[u8]) -> Shake256Reader {
+        Shake256Reader {
+            a: absorb(RATE_256, 0x1f, input),
+        }
+    }
+
+    /// Fill `out` (136 bytes) with the next output block.
+    pub fn next_block(&mut self, out: &mut [u8; RATE_256]) {
+        for (chunk, &word) in out.chunks_exact_mut(8).zip(&self.a[..RATE_256 / 8]) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        keccak_f1600(&mut self.a);
+    }
+}
+
 // Rates in bytes: (1600 - 2*capacity) / 8, capacity = 2 * security level.
 const RATE_256: usize = 136; // SHA3-256 and SHAKE256
 const RATE_512: usize = 72; // SHA3-512
