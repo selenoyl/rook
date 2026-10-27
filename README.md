@@ -62,9 +62,11 @@ are built from here, as user programs.
   - tasks meet at **endpoints**. A task with a send Writ and one with a
     receive Writ rendezvous, and the Keep hands a short message (four
     words) from one to the other, stamped with the sender's badge;
-  - a **Task Writ** lets one task watch another's state. The Keep
-    allocates nothing for any of this — the endpoints and wait queues are
-    set aside at boot.
+  - a **Task Writ** lets one task watch another's state;
+  - an **I/O Writ** grants a task a range of I/O ports, so a driver can
+    run in ring 3 and reach only its own device. The Keep allocates
+    nothing for any of this — the endpoints and wait queues are set aside
+    at boot.
 - **Raises the walls between ring 0 and ring 3**: SMEP (ring 0 can't run
   ring-3 code), SMAP (ring 0 can't read ring-3 memory except through one
   checked window), UMIP (ring 3 can't read the descriptor-table
@@ -79,8 +81,13 @@ are built from here, as user programs.
   endpoint and trading a sealed message — and checks on it through a Task
   Writ. The ring-3 test program checks the system calls, that bad
   arguments and ungranted Writs are refused, that the timer preempts a
-  ring-3 loop, that the cryptography is correct, and that it can open a
-  Drawbridge session with Michael over the Keep's message passing.
+  ring-3 loop, that the cryptography is correct, that it can open a
+  Drawbridge session with Michael, and that it can read a file from the
+  Vault — all over the Keep's message passing.
+- Starts the **Vault**, a storage service: it owns the disk through an I/O
+  Writ, drives an ATA controller and mounts a filesystem entirely in ring
+  3, and serves files to other tasks over an endpoint. A driver and a
+  filesystem as an ordinary user program, not privileged code.
 
 ## Cryptography (`crypto/`)
 
@@ -141,6 +148,28 @@ marked as such; real ones come from per-device entropy and Castling.
 
 The quantum-resistant pieces (ML-KEM, SLH-DSA) come next.
 
+## Storage: the Vault (`vault/`)
+
+The Vault is Rook's first general OS service, and it shows the microkernel
+model end to end: a **device driver and a filesystem running in ring 3**,
+reaching the disk only through a capability.
+
+- The `vault` crate is the filesystem: a superblock with a fixed
+  directory, files in contiguous extents, bump allocation. It rides on a
+  `BlockDevice` trait, so it is the same code on real hardware and over an
+  in-memory device in its 14 host tests. It treats the disk as untrusted —
+  a corrupt superblock or an out-of-range entry is refused, not followed.
+- `user::ata` is a small PIO, polled, LBA28 ATA driver. It is a *user*
+  program: it reaches the controller only through the Keep's I/O system
+  calls, holding an I/O Writ for the primary bus's ports and nothing else.
+- The `vault` task puts the two together — it mounts the disk and serves
+  files to other tasks over an endpoint. At boot it reports the disk's
+  geometry and files, and `check` reads one back over IPC.
+
+So the only code that touches the disk hardware is a ring-3 task the Keep
+could end like any other; a bug there cannot corrupt the Keep. The on-disk
+image is built by `tools/mkvault.py` and attached to QEMU as an IDE drive.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -193,9 +222,11 @@ addresses; the loader parses no ELF at all.
 | `keep/src/trap.rs` | What to do on each CPU exception |
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
-| `user/` | Rook's first user programs: Michael the supervisor, and `check`, the ring-3 test program. `user/src/sys.rs` is the other place `unsafe` is allowed |
+| `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
 | `crypto/` | Rook's cryptography, from the specs: SHA-2, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
+| `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
+| `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |
 | `UNSAFE.md` | Every unsafe use, and why it is sound |
 | `tools/check.py` | Review checks: unsafe only in the low-level modules and listed in UNSAFE.md; the Keep under 10,000 lines |
@@ -219,15 +250,16 @@ addresses; the loader parses no ELF at all.
 
 ## Next steps
 
-The Keep's privileged core is in place; the crypto foundation and the
-Drawbridge handshake are down. What's left builds on top:
+The Keep's privileged core is in place; the crypto foundation, the
+Drawbridge handshake and a ring-3 storage service are down. What's left
+builds on top:
 
 1. **Quantum-resistant crypto**: ML-KEM and SLH-DSA, to sit beside X25519
    and Ed25519 as the other half of Rook's hybrid, and a real entropy
    source in the Keep so sessions use fresh randomness, not demo keys.
-2. **General OS services**: a block-device driver and a simple filesystem,
-   as user-space services reached through Writs, so programs and data can
-   live on disk instead of being baked into the image.
+2. **A fuller Vault**: writes and deletion that reclaim space, and
+   carrying its files over a Drawbridge session so storage is encrypted
+   and authenticated end to end.
 3. The angels as real tasks (Michael spawning, watching and restarting
    the others, then Gabriel and Raphael), which also needs runtime task
    spawn and reclaiming an exited task's slot.

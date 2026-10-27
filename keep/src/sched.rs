@@ -28,7 +28,7 @@ use abi::Error;
 pub const MAX_TASKS: usize = TASK_SLOTS;
 const IDLE: usize = 0;
 /// Writs a task may hold at once.
-pub const CAPS_PER_TASK: usize = 4;
+pub const CAPS_PER_TASK: usize = 8;
 /// Endpoints the Keep sets aside at boot.
 pub const MAX_ENDPOINTS: usize = 8;
 

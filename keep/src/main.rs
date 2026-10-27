@@ -39,6 +39,10 @@ use sched::{Outcome, Writ};
 const REQUEST_EP: usize = 0;
 const REPLY_EP: usize = 1;
 
+/// The endpoints a task uses to ask the Vault for a file and hear back.
+const VAULT_REQUEST_EP: usize = 2;
+const VAULT_REPLY_EP: usize = 3;
+
 /// The primary ATA bus's I/O ports (0x1F0..0x1F8), which the Vault's I/O
 /// Writ covers so the storage service can drive the disk from ring 3.
 const ATA_IO_BASE: u16 = 0x1F0;
@@ -441,21 +445,57 @@ fn spawn_check(program: &user::Program, mode: u64, michael: usize) -> usize {
             badge: 0,
         },
     );
+    // Writs to ask the Vault for a file (handle 2) and hear back (handle 3).
+    sched::grant(
+        check,
+        2,
+        Writ::Endpoint {
+            endpoint: VAULT_REQUEST_EP,
+            send: true,
+            recv: false,
+            badge: check as u64,
+        },
+    );
+    sched::grant(
+        check,
+        3,
+        Writ::Endpoint {
+            endpoint: VAULT_REPLY_EP,
+            send: false,
+            recv: true,
+            badge: 0,
+        },
+    );
     sched::grant(michael, 2, Writ::Task { slot: check });
     check
 }
 
-/// Start the `vault` storage service, with an I/O Writ for the ATA bus so
-/// it can drive the disk from ring 3.
+/// Start the `vault` storage service: an I/O Writ for the ATA bus, a Writ
+/// to receive file requests, and one to send replies. Handles, in order:
+///   0  the ATA bus          1  receive requests          2  send replies
 fn spawn_vault(program: &user::Program) -> usize {
     spawn_user(
         "vault",
         program,
         0,
-        &[Writ::Io {
-            base: ATA_IO_BASE,
-            count: ATA_IO_COUNT,
-        }],
+        &[
+            Writ::Io {
+                base: ATA_IO_BASE,
+                count: ATA_IO_COUNT,
+            },
+            Writ::Endpoint {
+                endpoint: VAULT_REQUEST_EP,
+                send: false,
+                recv: true,
+                badge: 0,
+            },
+            Writ::Endpoint {
+                endpoint: VAULT_REPLY_EP,
+                send: true,
+                recv: false,
+                badge: 0,
+            },
+        ],
     )
 }
 

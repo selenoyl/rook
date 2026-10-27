@@ -21,7 +21,10 @@ use user::demo_identity::{MICHAEL_SECRET, ephemeral};
 
 const TO_SUPERVISOR: u64 = 0;
 const FROM_SUPERVISOR: u64 = 1;
-const ABSENT_HANDLE: u64 = 3;
+const TO_VAULT: u64 = 2;
+const FROM_VAULT: u64 = 3;
+/// A handle the Keep granted no Writ, for the refusal check.
+const ABSENT_HANDLE: u64 = 7;
 
 /// Where the Keep's image starts: memory no user task may read.
 const KEEP_IMAGE: u64 = 0xFFFF_FFFF_8000_0000;
@@ -133,6 +136,39 @@ fn run_checks() -> Result<(), &'static str> {
     // supervisor over the two endpoints, then trade a sealed message.
     drawbridge_over_ipc()?;
     let _ = user::log("drawbridge over IPC: sealed channel with the supervisor");
+
+    // The storage service: ask the Vault for a file over an endpoint and
+    // confirm its contents.
+    vault_request()?;
+    let _ = user::log("vault: read motd over IPC, contents verified");
+    Ok(())
+}
+
+/// Ask the Vault for the "motd" file over the request endpoint and confirm
+/// its contents, proving a user-space storage service reached via Writs.
+fn vault_request() -> Result<(), &'static str> {
+    let mut name = [0u8; 16];
+    name[..4].copy_from_slice(b"motd");
+    expect(
+        user::send_blob(TO_VAULT, &name).is_ok(),
+        "requesting a file from the vault",
+    )?;
+    let header = match user::recv(FROM_VAULT) {
+        Ok((_, words)) => words,
+        Err(_) => return Err("hearing back from the vault"),
+    };
+    expect(header[0] == 0, "the vault found the file")?;
+    let len = header[1] as usize;
+    let mut buf = [0u8; 64];
+    expect(len <= buf.len(), "the served file fits")?;
+    expect(
+        user::recv_blob(FROM_VAULT, &mut buf[..len]).is_ok(),
+        "reading the file from the vault",
+    )?;
+    expect(
+        &buf[..len] == b"The Keep holds. Rook stands watch.\n",
+        "the vault served the right bytes",
+    )?;
     Ok(())
 }
 
