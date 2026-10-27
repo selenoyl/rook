@@ -17,8 +17,9 @@ What runs today:
   loader and fail-closed traps; a faulting task is reaped and the Keep
   carries on.
 - A from-scratch, KAT-verified **cryptography** library — SHA-2, SHA-3,
-  HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519 and **ML-KEM-768**
-  (post-quantum) — plus a ChaCha20 **CSPRNG** seeded from the CPU.
+  HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, and the **post-quantum**
+  **ML-KEM-768** and **SLH-DSA** — plus a ChaCha20 **CSPRNG** seeded from
+  the CPU.
 - **Drawbridge**, a hybrid **X25519 + ML-KEM-768** authenticated session,
   running between two ring-3 tasks over the Keep's message passing.
 - The **Vault**, a storage service: an ATA driver and a filesystem in ring
@@ -122,6 +123,8 @@ no crates.
   (RFC 8032), over a shared 2^255-19 field.
 - **ML-KEM-768** (FIPS 203), the post-quantum key-encapsulation mechanism —
   the quantum-resistant half of Rook's hybrid key exchange.
+- **SLH-DSA-SHAKE-128f** (FIPS 205), the stateless hash-based post-quantum
+  signature (SPHINCS+), for quantum-resistant identity.
 - The symmetric pieces and the X25519 ladder are constant-time — no step
   branches on a key or a secret. Ed25519 signing is not yet (its
   double-and-add walks the scalar's bits), and the code says so.
@@ -129,9 +132,11 @@ no crates.
 Every primitive is checked against the official RFC/NIST **known-answer
 vectors** two ways: as host unit tests (`make test` runs them), and by
 `crypto::self_test()`, which the `check` program runs **in ring 3 at every
-boot**. ML-KEM-768 is pinned to the NIST ACVP vectors — the full key and
-ciphertext on the host, and the hashes of a keygen's outputs plus a
-round-trip in ring 3. A single wrong constant or rotation fails a vector,
+boot**. ML-KEM-768 and SLH-DSA are pinned to the NIST ACVP vectors — the
+full keys, signatures and ciphertext on the host (ML-KEM encaps/decaps and
+SLH-DSA keygen/sign/verify), and compact checks in ring 3 (ML-KEM keygen
+hashes plus a round-trip, and an SLH-DSA signature verify). A single wrong
+constant or rotation fails a vector,
 so this is a real correctness gate. It has not been through a security
 audit, so — as the design doc itself budgets — nothing here protects
 anything real until it has.
@@ -176,8 +181,9 @@ identity — and trade a sealed message, with a small fragmentation layer
 register-sized IPC packets. The two use fixed demo identity keys, clearly
 marked as such; real ones come from per-device entropy and Castling.
 
-The key exchange is already hybrid; **SLH-DSA** (post-quantum signatures)
-comes next, to make the identity authentication quantum-resistant too.
+The key exchange is already hybrid. **SLH-DSA** is implemented too (see
+`crypto`); wiring it in beside Ed25519 to make the identity authentication
+hybrid as well is the next step.
 
 ## Storage: the Vault (`vault/`)
 
@@ -259,7 +265,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
 | `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
-| `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, verified against the official vectors. No `unsafe`, no external crates |
+| `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
@@ -290,9 +296,10 @@ The Keep's privileged core is in place; the crypto foundation, the
 Drawbridge handshake and a ring-3 storage service are down. What's left
 builds on top:
 
-1. **Finish the post-quantum suite**: SLH-DSA signatures beside ML-KEM-768,
-   then a **hybrid Drawbridge** handshake combining X25519 and ML-KEM so a
-   recorded session stays secret even against a future quantum computer.
+1. **Hybrid identity authentication**: Drawbridge's key exchange is already
+   X25519 + ML-KEM-768, and SLH-DSA is implemented; the next step is signing
+   the handshake transcript with SLH-DSA beside Ed25519, so identity auth is
+   post-quantum too — then on to the Great Seal's k-of-n signing.
 2. **A fuller Vault**: writes and deletion from a client over the sealed
    channel, and freed-space reclamation, so the disk is read-write, not
    just read-mostly.

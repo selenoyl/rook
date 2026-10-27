@@ -129,6 +129,73 @@ fn keccak(rate: usize, domain: u8, input: &[u8], out: &mut [u8]) {
     }
 }
 
+/// A streaming SHAKE256: absorb the input in pieces, then squeeze any
+/// number of output bytes. SLH-DSA hashes long, multi-part messages, so it
+/// needs this rather than the one-shot form.
+pub struct Shake256 {
+    a: [u64; 25],
+    block: [u8; RATE_256],
+    filled: usize,
+}
+
+impl Default for Shake256 {
+    fn default() -> Shake256 {
+        Shake256 {
+            a: [0u64; 25],
+            block: [0u8; RATE_256],
+            filled: 0,
+        }
+    }
+}
+
+impl Shake256 {
+    pub fn new() -> Shake256 {
+        Shake256::default()
+    }
+
+    /// Absorb more input.
+    pub fn absorb(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            let take = core::cmp::min(RATE_256 - self.filled, data.len());
+            self.block[self.filled..self.filled + take].copy_from_slice(&data[..take]);
+            self.filled += take;
+            data = &data[take..];
+            if self.filled == RATE_256 {
+                absorb_block(&mut self.a, &self.block, RATE_256);
+                keccak_f1600(&mut self.a);
+                self.filled = 0;
+            }
+        }
+    }
+
+    /// Pad and squeeze the output into `out`.
+    pub fn finalize(mut self, out: &mut [u8]) {
+        for b in self.block[self.filled..].iter_mut() {
+            *b = 0;
+        }
+        self.block[self.filled] ^= 0x1f;
+        self.block[RATE_256 - 1] ^= 0x80;
+        absorb_block(&mut self.a, &self.block, RATE_256);
+        keccak_f1600(&mut self.a);
+        let mut done = 0;
+        loop {
+            for &word in &self.a[..RATE_256 / 8] {
+                if done >= out.len() {
+                    return;
+                }
+                let bytes = word.to_le_bytes();
+                let take = core::cmp::min(8, out.len() - done);
+                out[done..done + take].copy_from_slice(&bytes[..take]);
+                done += take;
+            }
+            if done >= out.len() {
+                return;
+            }
+            keccak_f1600(&mut self.a);
+        }
+    }
+}
+
 /// A SHAKE128 reader for squeezing a block at a time, as ML-KEM's matrix
 /// sampling needs. Its rate, 168 bytes, is a multiple of 3, so the sampler
 /// never straddles a block boundary.

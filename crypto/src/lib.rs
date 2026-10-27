@@ -25,6 +25,7 @@ mod poly1305;
 mod scalar;
 mod sha2;
 mod sha3;
+mod slhdsa;
 mod x25519;
 
 pub use aead::{aead_open, aead_seal, ct_eq};
@@ -38,7 +39,11 @@ pub use mlkem::{
 };
 pub use poly1305::{Poly1305, poly1305};
 pub use sha2::{Sha256, Sha512, sha256, sha512};
-pub use sha3::{sha3_256, sha3_512, shake128, shake256};
+pub use sha3::{Shake256, sha3_256, sha3_512, shake128, shake256};
+pub use slhdsa::{
+    PK_LEN as SLHDSA_PK_LEN, SIG_LEN as SLHDSA_SIG_LEN, SK_LEN as SLHDSA_SK_LEN,
+    keygen as slhdsa_keygen, sign as slhdsa_sign, verify as slhdsa_verify,
+};
 pub use x25519::{x25519, x25519_base};
 
 /// The RFC 8439 sample message, used by two of the vectors (§2.4.2, §2.8).
@@ -60,6 +65,28 @@ pub fn self_test() -> bool {
         && x25519_ok()
         && ed25519_ok()
         && mlkem_ok()
+        && slhdsa_ok()
+}
+
+/// SLH-DSA-SHAKE-128f verify against a NIST ACVP (FIPS 205) vector: the
+/// official signature must verify, and must be rejected under a wrong key.
+/// Verify is cheap; signing is pinned to the vector by the host tests.
+fn slhdsa_ok() -> bool {
+    // PK.seed ‖ PK.root for the sigGen vector (= its sk[32..64]).
+    const PK: [u8; SLHDSA_PK_LEN] = [
+        0xa0, 0x38, 0xbd, 0x65, 0x7f, 0xcf, 0x03, 0x1c, 0xf1, 0x33, 0x2e, 0x6e, 0x80, 0x9c, 0x2f,
+        0x88, 0x08, 0x51, 0xfc, 0x02, 0x45, 0x41, 0x90, 0x23, 0xde, 0xb2, 0x46, 0x35, 0x90, 0xcc,
+        0xb0, 0x0a,
+    ];
+    const MSG: &[u8] = include_bytes!("../testdata/slhdsa_msg.bin");
+    const SIG: &[u8] = include_bytes!("../testdata/slhdsa_sig.bin");
+
+    if !slhdsa_verify(MSG, SIG, &PK) {
+        return false;
+    }
+    let mut wrong = PK;
+    wrong[0] ^= 1;
+    !slhdsa_verify(MSG, SIG, &wrong)
 }
 
 /// ML-KEM-768: keygen pinned to the NIST ACVP (FIPS 203) vector by the
