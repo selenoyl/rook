@@ -86,18 +86,16 @@ fn absorb_block(a: &mut [u64; 25], block: &[u8], rate: usize) {
     }
 }
 
-/// The Keccak sponge: absorb `input` with the given `rate` and
-/// domain-separation byte, then squeeze `out.len()` bytes into `out`.
-fn keccak(rate: usize, domain: u8, input: &[u8], out: &mut [u8]) {
+/// Absorb `input` with the given `rate` and domain-separation byte,
+/// returning the state ready to squeeze (its first `rate` bytes are the
+/// first output block).
+fn absorb(rate: usize, domain: u8, input: &[u8]) -> [u64; 25] {
     let mut a = [0u64; 25];
-
-    // Absorb full blocks.
     let mut chunks = input.chunks_exact(rate);
     for block in chunks.by_ref() {
         absorb_block(&mut a, block, rate);
         keccak_f1600(&mut a);
     }
-
     // Final block: the remainder, then pad10*1 with the domain byte.
     let rem = chunks.remainder();
     let mut block = [0u8; MAX_RATE];
@@ -106,22 +104,52 @@ fn keccak(rate: usize, domain: u8, input: &[u8], out: &mut [u8]) {
     block[rate - 1] |= 0x80;
     absorb_block(&mut a, &block, rate);
     keccak_f1600(&mut a);
+    a
+}
 
-    // Squeeze.
+/// The Keccak sponge: absorb `input` with the given `rate` and
+/// domain-separation byte, then squeeze `out.len()` bytes into `out`.
+fn keccak(rate: usize, domain: u8, input: &[u8], out: &mut [u8]) {
+    let mut a = absorb(rate, domain, input);
     let mut done = 0;
-    while done < out.len() {
+    loop {
         for &word in &a[..rate / 8] {
             if done >= out.len() {
-                break;
+                return;
             }
             let bytes = word.to_le_bytes();
             let take = core::cmp::min(8, out.len() - done);
             out[done..done + take].copy_from_slice(&bytes[..take]);
             done += take;
         }
-        if done < out.len() {
-            keccak_f1600(&mut a);
+        if done >= out.len() {
+            return;
         }
+        keccak_f1600(&mut a);
+    }
+}
+
+/// A SHAKE128 reader for squeezing a block at a time, as ML-KEM's matrix
+/// sampling needs. Its rate, 168 bytes, is a multiple of 3, so the sampler
+/// never straddles a block boundary.
+pub struct Shake128Reader {
+    a: [u64; 25],
+}
+
+impl Shake128Reader {
+    /// Start a SHAKE128 reader over `input`.
+    pub fn new(input: &[u8]) -> Shake128Reader {
+        Shake128Reader {
+            a: absorb(RATE_128, 0x1f, input),
+        }
+    }
+
+    /// Fill `out` (168 bytes) with the next output block.
+    pub fn next_block(&mut self, out: &mut [u8; RATE_128]) {
+        for (chunk, &word) in out.chunks_exact_mut(8).zip(&self.a[..RATE_128 / 8]) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        keccak_f1600(&mut self.a);
     }
 }
 

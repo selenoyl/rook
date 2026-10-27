@@ -130,7 +130,7 @@ fn run_checks() -> Result<(), &'static str> {
     // Cryptography: every primitive against its official test vector,
     // computed here in ring 3.
     expect(crypto::self_test(), "cryptography known-answer vectors")?;
-    let _ = user::log("crypto: SHA-2, HMAC, ChaCha20-Poly1305, X25519, Ed25519 verified");
+    let _ = user::log("crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768 verified");
 
     // Drawbridge: a full handshake and sealed exchange, in ring 3.
     expect(drawbridge::self_test(), "Drawbridge handshake and session")?;

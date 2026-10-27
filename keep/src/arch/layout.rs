@@ -21,7 +21,9 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 /// unmapped guard page.
 pub const USER_MIN: u64 = 0x1000;
 pub const USER_MAX: u64 = 0x0000_8000_0000_0000;
-pub const USER_STACK_SIZE: u64 = 16 * 1024;
+// Generous enough for the post-quantum crypto (ML-KEM builds a matrix of
+// polynomials on the stack), with a guard page below.
+pub const USER_STACK_SIZE: u64 = 128 * 1024;
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_F000;
 
 /// The lowest mapped byte of a user task's stack.
