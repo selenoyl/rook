@@ -11,6 +11,8 @@
 #[allow(unsafe_code)]
 pub mod sys;
 
+pub mod ata;
+
 pub use abi;
 pub use abi::Error;
 use abi::call;
@@ -107,6 +109,43 @@ pub fn recv(handle: u64) -> Result<(u64, [u64; abi::MSG_WORDS]), Refused> {
 /// result with `abi::status`.
 pub fn watch(handle: u64) -> Result<u64, Refused> {
     abi::result(sys::call(call::WATCH, [handle, 0, 0, 0]))
+}
+
+/// Read one byte from a device register through an I/O Writ.
+pub fn io_in(handle: u64, port: u16) -> Result<u8, Refused> {
+    abi::result(sys::call(call::IO_IN, [handle, u64::from(port), 0, 0])).map(|v| v as u8)
+}
+
+/// Write one byte to a device register through an I/O Writ.
+pub fn io_out(handle: u64, port: u16, value: u8) -> Result<(), Refused> {
+    abi::result(sys::call(
+        call::IO_OUT,
+        [handle, u64::from(port), u64::from(value), 0],
+    ))
+    .map(|_| ())
+}
+
+/// Read `buf.len()/2` 16-bit words from a device data port into `buf`
+/// through an I/O Writ. `buf` must have an even length, at most
+/// `2 * abi::MAX_IO_WORDS` bytes.
+pub fn io_read(handle: u64, port: u16, buf: &mut [u8]) -> Result<(), Refused> {
+    let words = (buf.len() / 2) as u64;
+    abi::result(sys::call(
+        call::IO_READ,
+        [handle, u64::from(port), buf.as_ptr() as u64, words],
+    ))
+    .map(|_| ())
+}
+
+/// Write `buf.len()/2` 16-bit words from `buf` out to a device data port
+/// through an I/O Writ.
+pub fn io_write(handle: u64, port: u16, buf: &[u8]) -> Result<(), Refused> {
+    let words = (buf.len() / 2) as u64;
+    abi::result(sys::call(
+        call::IO_WRITE,
+        [handle, u64::from(port), buf.as_ptr() as u64, words],
+    ))
+    .map(|_| ())
 }
 
 /// Bytes carried in one endpoint message (four 64-bit words).

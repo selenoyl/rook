@@ -7,9 +7,11 @@
 KERNEL   := target/x86_64-unknown-none/release/keep
 USER_DIR := target/x86_64-unknown-none/release
 IMAGE    := build/keep.bin
+DISK     := build/disk.img
 QEMU     := qemu-system-x86_64 -cpu max -m 128M -no-reboot
+DRIVE    := -drive file=$(DISK),format=raw,if=ide
 
-.PHONY: all build user run test check screen clean FORCE
+.PHONY: all build user run test check screen disk clean FORCE
 
 all: build
 
@@ -27,8 +29,15 @@ $(IMAGE): user FORCE
 	mkdir -p build
 	objcopy -O binary $(KERNEL) $(IMAGE)
 
-run: build
-	$(QEMU) -kernel $(IMAGE) -serial stdio
+# The Vault's disk: a raw image with a small filesystem, built by mkvault.
+disk: $(DISK)
+
+$(DISK):
+	mkdir -p build
+	python3 tools/mkvault.py $(DISK)
+
+run: build $(DISK)
+	$(QEMU) -kernel $(IMAGE) $(DRIVE) -serial stdio
 
 check:
 	cargo fmt --check
@@ -36,10 +45,10 @@ check:
 	cargo test -p crypto -p drawbridge -p vault --target x86_64-unknown-linux-gnu
 	python3 tools/check.py
 
-test: build check
+test: build check $(DISK)
 	python3 tests/boot_test.py $(IMAGE)
 
-screen: build
+screen: build $(DISK)
 	python3 tools/screenshot.py $(IMAGE) build/screen.png
 
 clean:

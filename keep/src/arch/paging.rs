@@ -233,13 +233,26 @@ impl AddressSpace {
     /// buffer a user task names, so the task can't aim it at the Keep's
     /// own memory.
     pub fn user_range_ok(&self, start: u64, len: u64) -> bool {
+        self.range_has(start, len, PRESENT | USER)
+    }
+
+    /// As `user_range_ok`, but the range must also be writable: the check
+    /// before the Keep writes into a buffer a user task named, so the task
+    /// can't make the Keep write a page it may only read.
+    pub fn user_range_writable(&self, start: u64, len: u64) -> bool {
+        self.range_has(start, len, PRESENT | USER | WRITABLE)
+    }
+
+    /// Whether every page of `[start, start + len)` is present and carries
+    /// all of `flags`.
+    fn range_has(&self, start: u64, len: u64, flags: u64) -> bool {
         let Some(end) = start.checked_add(len) else {
             return false;
         };
         let mut page = start & !(PAGE_SIZE - 1);
         while page < end {
             match self.translate(page) {
-                Some((_, flags)) if flags & (PRESENT | USER) == PRESENT | USER => {}
+                Some((_, got)) if got & flags == flags => {}
                 _ => return false,
             }
             match page.checked_add(PAGE_SIZE) {

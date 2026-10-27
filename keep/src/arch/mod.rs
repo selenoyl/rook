@@ -14,6 +14,11 @@ pub mod pic;
 mod pit;
 mod port;
 pub mod qemu;
+
+/// The capability-gated device I/O the syscall layer uses, once it has
+/// checked a task's I/O Writ. The unsafe port instructions stay private to
+/// `port`.
+pub use port::{drain_port, fill_port, reg_in8, reg_out8};
 pub mod serial;
 pub mod sync;
 pub mod task;

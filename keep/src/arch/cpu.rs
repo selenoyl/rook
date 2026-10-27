@@ -301,6 +301,23 @@ pub fn copy_from_user(dst: &mut [u8], src: u64) {
     });
 }
 
+/// Copy `src.len()` bytes into user address `dst`. The caller must have
+/// checked that `[dst, dst + src.len())` is present, user-owned, writable
+/// memory in the address space now loaded (the calling task's), so this
+/// writes only that task's memory.
+pub fn copy_to_user(dst: u64, src: &[u8]) {
+    with_user_access(|| {
+        for (i, &byte) in src.iter().enumerate() {
+            let at = dst.wrapping_add(i as u64);
+            // SAFETY: the caller validated the whole range as present,
+            // writable user memory in the current space; `i < src.len()`,
+            // so `at` is inside it. Volatile, as it is another ring's
+            // memory.
+            unsafe { (at as *mut u8).write_volatile(byte) };
+        }
+    });
+}
+
 fn read_cr4() -> u64 {
     let value: u64;
     // SAFETY: reading CR4 has no side effects.

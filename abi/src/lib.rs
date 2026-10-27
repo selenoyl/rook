@@ -42,7 +42,23 @@ pub mod call {
     /// Ask after a task a Task Writ names: `(handle)`. Returns its status
     /// (see `status`). Needs a Task Writ.
     pub const WATCH: u64 = 7;
+    /// Read one byte from a device register: `(handle, port)`. Returns the
+    /// byte. Needs an I/O Writ whose range covers `port`.
+    pub const IO_IN: u64 = 8;
+    /// Write one byte to a device register: `(handle, port, value)`. Needs
+    /// an I/O Writ whose range covers `port`.
+    pub const IO_OUT: u64 = 9;
+    /// Read `words` 16-bit words from a device data port into a buffer:
+    /// `(handle, port, address, words)`. Needs an I/O Writ covering `port`.
+    pub const IO_READ: u64 = 10;
+    /// Write `words` 16-bit words from a buffer out to a device data port:
+    /// `(handle, port, address, words)`. Needs an I/O Writ covering `port`.
+    pub const IO_WRITE: u64 = 11;
 }
+
+/// The most 16-bit words one `IO_READ` or `IO_WRITE` may move: a 512-byte
+/// block. The Keep buffers the transfer, so this bounds that buffer.
+pub const MAX_IO_WORDS: u64 = 256;
 
 /// The longest message LOG takes, in bytes.
 pub const MAX_LOG: u64 = 200;

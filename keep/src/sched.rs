@@ -68,6 +68,10 @@ pub enum Writ {
     },
     /// The right to ask after another task (watch it).
     Task { slot: usize },
+    /// The right to drive a device: I/O ports `[base, base + count)`. The
+    /// Keep's microkernel keeps drivers in ring 3, so a driver task holds
+    /// one of these for exactly its device's registers and nothing else.
+    Io { base: u16, count: u16 },
 }
 
 /// A FIFO of tasks waiting on an endpoint, linked through `Task::wait_next`
@@ -485,6 +489,21 @@ pub fn watch(handle: u64, current: Context) -> Context {
         Some(next) => next,
         None => crate::fail_closed(),
     }
+}
+
+/// Whether the running task holds an I/O Writ at `handle` whose port range
+/// covers `port`: the check behind every device-I/O system call.
+pub fn io_allows(handle: u64, port: u16) -> bool {
+    SCHEDULER
+        .with(|s| {
+            let cur = s.current;
+            matches!(
+                s.cap(cur, handle),
+                Some(Writ::Io { base, count })
+                    if port >= base && u32::from(port) < u32::from(base) + u32::from(count)
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// End the running user task, which faulted, and run the next task. The

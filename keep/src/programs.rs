@@ -10,3 +10,6 @@ pub const MICHAEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/michael.elf
 
 /// check: the user-mode test program, run at every boot.
 pub const CHECK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/check.elf"));
+
+/// vault: the storage service that owns the disk.
+pub const VAULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vault.elf"));

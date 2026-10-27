@@ -114,13 +114,19 @@ CASES = [
 def run(kernel, cmdline, log):
     if os.path.exists(log):
         os.remove(log)
+    command = [
+        "qemu-system-x86_64", "-cpu", "max", "-kernel", kernel, "-append", cmdline,
+        "-m", "128M", "-display", "none", "-no-reboot",
+        "-serial", f"file:{log}",
+        "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+    ]
+    # Attach the Vault's disk image if it was built next to the kernel, so
+    # the storage service has a disk to drive.
+    disk = os.path.join(os.path.dirname(os.path.abspath(kernel)), "disk.img")
+    if os.path.exists(disk):
+        command += ["-drive", f"file={disk},format=raw,if=ide"]
     try:
-        proc = subprocess.run([
-            "qemu-system-x86_64", "-cpu", "max", "-kernel", kernel, "-append", cmdline,
-            "-m", "128M", "-display", "none", "-no-reboot",
-            "-serial", f"file:{log}",
-            "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
-        ], timeout=TIMEOUT)
+        proc = subprocess.run(command, timeout=TIMEOUT)
         status = proc.returncode
     except subprocess.TimeoutExpired:
         status = None

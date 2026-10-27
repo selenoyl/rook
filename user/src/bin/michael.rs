@@ -31,21 +31,8 @@ fn main(_: u64) -> ! {
 
     // Open a secure channel with the ward: a Drawbridge handshake and a
     // sealed exchange, carried over the two endpoints the Keep granted.
-    match serve_drawbridge() {
-        Some(badge) => {
-            user::logln!("drawbridge: authenticated task {badge}, opened its sealed report");
-            match user::watch(WARD) {
-                Ok(s) if status::kind(s) == status::ALIVE => {
-                    user::logln!("task {badge} is alive and well");
-                }
-                _ => {
-                    user::logln!("task {badge} is already gone");
-                }
-            }
-        }
-        None => {
-            let _ = user::log("drawbridge: could not open a session with the ward");
-        }
+    if serve_drawbridge().is_none() {
+        let _ = user::log("drawbridge: could not open a session with the ward");
     }
 
     // Keep watch until the ward finishes, then report how it ended.
@@ -101,6 +88,18 @@ fn serve_drawbridge() -> Option<u64> {
     report.copy_from_slice(&incoming[..32]);
     tag.copy_from_slice(&incoming[32..]);
     session.open(&mut report, &tag).ok()?;
+    user::logln!("drawbridge: authenticated task {badge}, opened its sealed report");
+
+    // The ward is now blocked waiting for our reply, so it is alive: a good
+    // moment to prove the Task Writ still sees it.
+    match user::watch(WARD) {
+        Ok(s) if status::kind(s) == status::ALIVE => {
+            user::logln!("task {badge} is alive and well");
+        }
+        _ => {
+            user::logln!("task {badge} is already gone");
+        }
+    }
 
     // Seal a reply back.
     let mut reply: [u8; 32] = *b"welcome; you have the watch now.";

@@ -39,6 +39,11 @@ use sched::{Outcome, Writ};
 const REQUEST_EP: usize = 0;
 const REPLY_EP: usize = 1;
 
+/// The primary ATA bus's I/O ports (0x1F0..0x1F8), which the Vault's I/O
+/// Writ covers so the storage service can drive the disk from ring 3.
+const ATA_IO_BASE: u16 = 0x1F0;
+const ATA_IO_COUNT: u16 = 8;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Memory below 1 MiB belongs to the BIOS and devices.
@@ -175,10 +180,11 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
             spawn_check(&booted.check, abi::check::CRASH, michael),
             Watch::Crash,
         )),
-        _ => Some((
-            spawn_check(&booted.check, abi::check::CALLS, michael),
-            Watch::Checks,
-        )),
+        _ => {
+            let check = spawn_check(&booted.check, abi::check::CALLS, michael);
+            spawn_vault(&booted.vault);
+            Some((check, Watch::Checks))
+        }
     };
 
     arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
@@ -276,6 +282,7 @@ struct Booted {
     stack_guards: usize,
     michael: user::Program,
     check: user::Program,
+    vault: user::Program,
 }
 
 /// Replace the boot page tables with the Keep's own, load the user
@@ -318,6 +325,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
 
     let michael = load_program("michael", programs::MICHAEL, &kernel.space, &mut frames);
     let check = load_program("check", programs::CHECK, &kernel.space, &mut frames);
+    let vault = load_program("vault", programs::VAULT, &kernel.space, &mut frames);
 
     frames.seal();
     kprintln!(
@@ -336,6 +344,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
         stack_guards: kernel.guard_pages + kernel.task_stacks,
         michael,
         check,
+        vault,
     }
 }
 
@@ -434,6 +443,20 @@ fn spawn_check(program: &user::Program, mode: u64, michael: usize) -> usize {
     );
     sched::grant(michael, 2, Writ::Task { slot: check });
     check
+}
+
+/// Start the `vault` storage service, with an I/O Writ for the ATA bus so
+/// it can drive the disk from ring 3.
+fn spawn_vault(program: &user::Program) -> usize {
+    spawn_user(
+        "vault",
+        program,
+        0,
+        &[Writ::Io {
+            base: ATA_IO_BASE,
+            count: ATA_IO_COUNT,
+        }],
+    )
 }
 
 /// The kernel-task-stack test: recurse until the task's stack runs out.
