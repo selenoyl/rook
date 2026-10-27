@@ -54,7 +54,13 @@ pub mod call {
     /// Write `words` 16-bit words from a buffer out to a device data port:
     /// `(handle, port, address, words)`. Needs an I/O Writ covering `port`.
     pub const IO_WRITE: u64 = 11;
+    /// Fill a buffer with cryptographically-random bytes: `(address,
+    /// length)`. Needs no Writ; randomness is safe for any task to ask for.
+    pub const RANDOM: u64 = 12;
 }
+
+/// The most bytes one `RANDOM` call fills, bounding the Keep's buffer.
+pub const MAX_RANDOM: u64 = 256;
 
 /// The most 16-bit words one `IO_READ` or `IO_WRITE` may move: a 512-byte
 /// block. The Keep buffers the transfer, so this bounds that buffer.

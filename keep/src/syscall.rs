@@ -15,7 +15,7 @@ use crate::arch::cpu;
 use crate::arch::paging::AddressSpace;
 use crate::arch::task::{Context, SyscallFrame};
 use crate::sched;
-use abi::{Error, MAX_IO_WORDS, MAX_LOG, MAX_SLEEP, call};
+use abi::{Error, MAX_IO_WORDS, MAX_LOG, MAX_RANDOM, MAX_SLEEP, call};
 
 /// Handle one system call and return the task to run next: the caller
 /// again for a call that just returns a value, or another task for one
@@ -63,6 +63,10 @@ pub fn handle(frame: SyscallFrame) -> Context {
         }
         call::IO_WRITE => {
             frame.set_result(io_write(args[0], args[1], args[2], args[3]));
+            frame.context()
+        }
+        call::RANDOM => {
+            frame.set_result(random(args[0], args[1]));
             frame.context()
         }
         _ => {
@@ -188,5 +192,24 @@ fn io_write(handle: u64, port: u64, address: u64, words: u64) -> u64 {
     let slice = &mut buffer[..len];
     cpu::copy_from_user(slice, address);
     arch::fill_port(port, slice);
+    0
+}
+
+/// RANDOM: fill a user buffer with cryptographically-random bytes. No Writ
+/// is needed; randomness is safe for any task to ask for.
+fn random(address: u64, length: u64) -> u64 {
+    if length == 0 {
+        return 0;
+    }
+    if length > MAX_RANDOM {
+        return Error::TooLong.to_raw();
+    }
+    if !AddressSpace::current().user_range_writable(address, length) {
+        return Error::BadAddress.to_raw();
+    }
+    let mut buffer = [0u8; MAX_RANDOM as usize];
+    let slice = &mut buffer[..length as usize];
+    crate::random::fill(slice);
+    cpu::copy_to_user(address, slice);
     0
 }

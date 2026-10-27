@@ -35,6 +35,8 @@ CASES = [
             "[keep] sched: timer on, 100 ticks a second",
             "[michael] supervisor, standing watch",
             "[check] running in ring 3",
+            "[keep] entropy: CSPRNG seeded from the CPU (RDSEED)",
+            "[check] entropy: random bytes drawn from the Keep, and they differ",
             "[check] crypto: SHA-2, HMAC, ChaCha20-Poly1305, X25519, Ed25519 verified",
             "[check] drawbridge: authenticated session established and verified",
             "[check] drawbridge over IPC: sealed channel with the supervisor",

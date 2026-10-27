@@ -22,6 +22,9 @@ const CPUID_APIC: u32 = 1 << 9;
 const CPUID_SMEP: u32 = 1 << 7;
 const CPUID_SMAP: u32 = 1 << 20;
 const CPUID_UMIP: u32 = 1 << 2;
+/// RDRAND: leaf 1 ECX bit 30. RDSEED: leaf 7 EBX bit 18.
+const CPUID_RDRAND: u32 = 1 << 30;
+const CPUID_RDSEED: u32 = 1 << 18;
 
 /// Whether SMAP is on, so `with_user_access` knows to lift it briefly.
 static SMAP_ON: AtomicBool = AtomicBool::new(false);
@@ -185,6 +188,91 @@ fn has_apic() -> bool {
 /// The IA32_APIC_BASE register, or None if the CPU has no local APIC.
 pub fn apic_base() -> Option<u64> {
     has_apic().then(|| rdmsr(APIC_BASE))
+}
+
+fn has_rdrand() -> bool {
+    let ecx: u32;
+    // SAFETY: CPUID leaf 1 exists on every 64-bit CPU and only reports
+    // features; rbx is saved and restored around CPUID.
+    unsafe {
+        asm!(
+            "mov {t}, rbx", "cpuid", "mov rbx, {t}",
+            t = out(reg) _,
+            inout("eax") 1u32 => _, inout("ecx") 0u32 => ecx, out("edx") _,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    ecx & CPUID_RDRAND != 0
+}
+
+fn has_rdseed() -> bool {
+    cpuid_leaf7().0 & CPUID_RDSEED != 0
+}
+
+/// One 64-bit value from RDRAND, or None if it did not succeed in a bounded
+/// number of tries.
+fn rdrand64() -> Option<u64> {
+    for _ in 0..32 {
+        let value: u64;
+        let ok: u8;
+        // SAFETY: RDRAND writes a general register and the carry flag and
+        // touches no memory; it is only called when CPUID says it exists.
+        unsafe {
+            asm!("rdrand {v}", "setc {c}", v = out(reg) value, c = out(reg_byte) ok, options(nostack));
+        }
+        if ok != 0 {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// One 64-bit value from RDSEED (a truer entropy source than RDRAND), or
+/// None if it did not succeed in a bounded number of tries.
+fn rdseed64() -> Option<u64> {
+    for _ in 0..256 {
+        let value: u64;
+        let ok: u8;
+        // SAFETY: as for `rdrand64`; RDSEED has the same shape and is only
+        // called when CPUID says it exists.
+        unsafe {
+            asm!("rdseed {v}", "setc {c}", v = out(reg) value, c = out(reg_byte) ok, options(nostack));
+        }
+        if ok != 0 {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Fill `words` from the CPU's hardware random generator, preferring RDSEED
+/// over RDRAND. Returns the source's name, or None if the CPU has neither
+/// or a draw kept failing.
+pub fn hardware_random(words: &mut [u64]) -> Option<&'static str> {
+    let (source, draw): (&str, fn() -> Option<u64>) = if has_rdseed() {
+        ("RDSEED", rdseed64)
+    } else if has_rdrand() {
+        ("RDRAND", rdrand64)
+    } else {
+        return None;
+    };
+    for word in words.iter_mut() {
+        *word = draw()?;
+    }
+    Some(source)
+}
+
+/// The CPU timestamp counter, a fallback entropy mix when there is no
+/// hardware random generator.
+pub fn timestamp() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    // SAFETY: RDTSC reads the timestamp counter into edx:eax and touches no
+    // memory; it exists on every 64-bit CPU.
+    unsafe {
+        asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags));
+    }
+    (u64::from(hi) << 32) | u64::from(lo)
 }
 
 /// Which walls between ring 0 and ring 3 the Keep turned on.

@@ -76,6 +76,10 @@ are built from here, as user programs.
   the Keep carries on; only a fault in the Keep's own code stops the
   machine. The log names the faulting address, whether it hit a stack
   guard, and which task was running.
+- **Hands out randomness.** A ChaCha20 CSPRNG, seeded at boot from the
+  CPU's hardware generator (RDSEED, else RDRAND), backs a `random` system
+  call. It rekeys on every draw, so earlier output can't be recovered from
+  a later key. Drawbridge's ephemeral keys are drawn from it.
 - Starts **Michael**, the supervisor, as the first user task. He opens a
   Drawbridge session with the task he watches — authenticating it over an
   endpoint and trading a sealed message — and checks on it through a Task
@@ -135,8 +139,9 @@ and Noise, built only from `crypto` above. `drawbridge::self_test()` runs a
 full handshake and sealed exchange **in ring 3 at every boot**, and the
 host tests additionally prove tampering, replay, a swapped ephemeral, a
 pinned-identity mismatch and a low-order point are all caught. The caller
-supplies the random secret keys; this crate has no entropy source, and
-like the crypto beneath it, it is **not audited**.
+supplies the random secret keys — in the running demo, Michael and `check`
+draw their ephemeral keys from the Keep's CSPRNG. Like the crypto beneath
+it, the protocol is **not audited**.
 
 And it already runs **between two separate tasks over real endpoints**: at
 every boot, `check` (the initiator) and `michael` (the responder) run the
@@ -218,6 +223,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/sched.rs` | The scheduler: kernel and user tasks, address-space and kernel-stack switching, Writs, endpoints and message passing |
 | `keep/src/user.rs` | The Gatehouse ELF loader that builds a user program's address space |
 | `keep/src/syscall.rs` | The system calls, each argument and Writ checked |
+| `keep/src/random.rs` | The ChaCha20 CSPRNG, seeded from the CPU's hardware RNG |
 | `keep/src/programs.rs` | The user programs' ELF images, embedded by `keep/build.rs` |
 | `keep/src/trap.rs` | What to do on each CPU exception |
 | `keep/src/banner.rs` | The boot screen |

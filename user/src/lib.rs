@@ -148,6 +148,18 @@ pub fn io_write(handle: u64, port: u16, buf: &[u8]) -> Result<(), Refused> {
     .map(|_| ())
 }
 
+/// Fill `buf` with cryptographically-random bytes from the Keep. No Writ
+/// is needed.
+pub fn random(buf: &mut [u8]) -> Result<(), Refused> {
+    for chunk in buf.chunks_mut(abi::MAX_RANDOM as usize) {
+        abi::result(sys::call(
+            call::RANDOM,
+            [chunk.as_ptr() as u64, chunk.len() as u64, 0, 0],
+        ))?;
+    }
+    Ok(())
+}
+
 /// Bytes carried in one endpoint message (four 64-bit words).
 const BLOB_CHUNK: usize = abi::MSG_WORDS * 8;
 
@@ -210,14 +222,13 @@ pub mod demo_identity {
     /// The check task's demo identity secret.
     pub const CHECK_SECRET: [u8; 32] = [0x43; 32];
 
-    /// A throwaway ephemeral secret for one handshake. Mixes a role tag
-    /// with the current tick so two boots differ; this is a stand-in, not
-    /// a real entropy source, and is documented as such.
+    /// A fresh ephemeral secret for one handshake, drawn from the Keep's
+    /// CSPRNG. `role` is mixed in only as a fallback, so the two ends still
+    /// differ if the randomness call were ever refused.
     pub fn ephemeral(role: u8) -> [u8; 32] {
-        let mut seed = [0u8; 16];
-        seed[0] = role;
-        seed[1..9].copy_from_slice(&super::now().to_le_bytes());
-        crypto::sha256(&seed)
+        let mut secret = [role; 32];
+        let _ = super::random(&mut secret);
+        secret
     }
 }
 

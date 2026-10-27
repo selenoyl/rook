@@ -24,6 +24,7 @@ mod bootinfo;
 mod frames;
 mod memory;
 mod programs;
+mod random;
 mod sched;
 mod syscall;
 mod trap;
@@ -134,6 +135,11 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         check_ok && long_mode && nx && walls_ok && booted.free_bytes > 0,
         Ordering::Relaxed,
     );
+
+    match random::seed() {
+        Some(source) => kprintln!("[keep] entropy: CSPRNG seeded from the CPU ({source})"),
+        None => kprintln!("[keep] entropy: no hardware RNG; CSPRNG seeded weakly from the clock"),
+    }
 
     banner::draw(&banner::Summary {
         usable_mib: boot.usable_bytes() >> 20,

@@ -22,6 +22,7 @@ name = "keep"
 version = "0.7.0"
 dependencies = [
  "abi",
+ "crypto",
 ]
 
 [[package]]

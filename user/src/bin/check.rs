@@ -113,6 +113,20 @@ fn run_checks() -> Result<(), &'static str> {
         "an unknown call is refused",
     )?;
 
+    // Entropy: the Keep hands out random bytes, and two draws differ and
+    // aren't all zero.
+    let mut first = [0u8; 32];
+    let mut second = [0u8; 32];
+    expect(
+        user::random(&mut first).is_ok() && user::random(&mut second).is_ok(),
+        "drawing randomness from the Keep",
+    )?;
+    expect(
+        first != second && first != [0u8; 32],
+        "the randomness looks random",
+    )?;
+    let _ = user::log("entropy: random bytes drawn from the Keep, and they differ");
+
     // Cryptography: every primitive against its official test vector,
     // computed here in ring 3.
     expect(crypto::self_test(), "cryptography known-answer vectors")?;
