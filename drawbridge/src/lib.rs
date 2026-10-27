@@ -1,18 +1,21 @@
 //! Drawbridge: Rook's authenticated, encrypted session between two tasks.
 //!
-//! Two parties that each hold a long-term Ed25519 identity run a short
-//! handshake and come away with a [`Session`] that seals and opens
-//! messages with ChaCha20-Poly1305. The handshake is a SIGMA-style
-//! exchange:
+//! Two parties that each hold a long-term hybrid identity — an Ed25519 key
+//! and an ML-DSA-87 key — run a short handshake and come away with a
+//! [`Session`] that seals and opens messages with ChaCha20-Poly1305. The
+//! handshake is a SIGMA-style exchange:
 //!
-//! 1. Each side sends a fresh ephemeral X25519 public key, so the agreed
-//!    key is forward-secret — recording the traffic and later stealing an
-//!    identity key does not reveal it.
-//! 2. Each side signs the transcript (both ephemeral keys) with its
-//!    identity key, proving who it is and binding the signature to this
-//!    exact exchange. The signatures and identities travel encrypted under
-//!    the agreed key, so an eavesdropper learns neither, and a correct tag
-//!    also confirms the peer really computed the same key.
+//! 1. Each side sends a fresh ephemeral X25519 public key and an ephemeral
+//!    ML-KEM-1024 key, so the agreed key is forward-secret (recording the
+//!    traffic and later stealing an identity key does not reveal it) and
+//!    safe against a future quantum computer.
+//! 2. Each side signs the transcript with *both* halves of its identity —
+//!    Ed25519 and ML-DSA-87 — proving who it is and binding the signatures
+//!    to this exact exchange. A verifier requires both to check, so the
+//!    node stays authentic even if elliptic curves fall. The signatures and
+//!    identities travel encrypted under the agreed key, so an eavesdropper
+//!    learns neither, and a correct tag also confirms the peer really
+//!    computed the same key.
 //!
 //! The result: mutual authentication, forward secrecy, and confidentiality,
 //! the properties the design doc asks of Drawbridge. The data channel
@@ -35,11 +38,25 @@ mod session;
 pub use handshake::{Initiator, InitiatorDone, Responder, ResponderDone};
 pub use session::Session;
 
-use crypto::{MLKEM_CT_LEN, MLKEM_EK_LEN, Sha512, expand_sha512, extract_sha512, shake256};
+use crypto::{
+    MLDSA_PK_LEN, MLDSA_SK_LEN, MLKEM_CT_LEN, MLKEM_EK_LEN, Sha512, expand_sha512, extract_sha512,
+    mldsa_keygen, mldsa_sign, mldsa_verify, shake256,
+};
 
 /// Public ephemeral sizes.
 const X_PUB: usize = 32; // X25519 public key
-const SEALED: usize = 96 + 16; // seal(identity 32 || signature 64) + tag
+const ED_PUB: usize = 32; // Ed25519 public key
+const ED_SIG: usize = 64; // Ed25519 signature
+
+/// A node's public identity on the wire: an Ed25519 key followed by an
+/// ML-DSA-87 key. Pinning or trusting a peer means pinning these bytes.
+pub const ID_LEN: usize = ED_PUB + MLDSA_PK_LEN; // 2624
+/// A hybrid signature over the transcript: Ed25519 then ML-DSA-87.
+const SIG_LEN: usize = ED_SIG + crypto::MLDSA_SIG_LEN; // 4691
+/// The sealed handshake payload: identity ‖ signature.
+const PAYLOAD: usize = ID_LEN + SIG_LEN; // 7315
+/// That payload once sealed: plus the 16-byte AEAD tag.
+const SEALED: usize = PAYLOAD + 16;
 
 /// Bytes on the wire for the three handshake messages.
 /// msg1 = e_i ‖ ML-KEM ek
@@ -49,9 +66,10 @@ pub const MSG2_LEN: usize = X_PUB + MLKEM_CT_LEN + SEALED;
 /// msg3 = seal(id_i ‖ sig_i)
 pub const MSG3_LEN: usize = SEALED;
 
-/// Domain-separation label mixed into the transcript hash. v2 is the
-/// hybrid X25519 + ML-KEM-1024 handshake.
-const PROTO: &[u8] = b"rook-drawbridge-v2-hybrid";
+/// Domain-separation label mixed into the transcript hash. v3 is the
+/// hybrid X25519 + ML-KEM-1024 exchange with a hybrid Ed25519 + ML-DSA-87
+/// identity.
+const PROTO: &[u8] = b"rook-drawbridge-v3-hybrid";
 /// Role labels prefixed to the signed transcript, so a responder's
 /// signature can never be replayed as an initiator's, or the reverse.
 const ROLE_RESPONDER: &[u8] = b"drawbridge responder";
@@ -79,28 +97,64 @@ pub enum Error {
     CounterExhausted,
 }
 
-/// A long-term identity: an Ed25519 key pair, held as its 32-byte secret
-/// and the public key derived from it.
+/// A long-term hybrid identity: an Ed25519 key pair and an ML-DSA-87 key
+/// pair. Both are derived from one 32-byte secret, so a caller still holds
+/// a single secret, but the node signs and is verified with both schemes.
 #[derive(Clone)]
 pub struct Identity {
-    pub(crate) secret: [u8; 32],
-    public: [u8; 32],
+    pub(crate) ed_secret: [u8; 32],
+    ed_public: [u8; ED_PUB],
+    pub(crate) mldsa_secret: [u8; MLDSA_SK_LEN],
+    mldsa_public: [u8; MLDSA_PK_LEN],
 }
 
 impl Identity {
     /// Build an identity from a 32-byte secret (the caller's to generate
-    /// from real randomness and to keep secret).
+    /// from real randomness and to keep secret). The Ed25519 key is that
+    /// secret; the ML-DSA key is generated from a seed expanded from it, so
+    /// both halves are bound to the one secret.
     pub fn from_secret(secret: &[u8; 32]) -> Identity {
+        let ed_public = crypto::public_key(secret);
+        let mldsa_seed = expand_seed(secret, LABEL_MLDSA_ID);
+        let (mldsa_public, mldsa_secret) = mldsa_keygen(&mldsa_seed);
         Identity {
-            secret: *secret,
-            public: crypto::public_key(secret),
+            ed_secret: *secret,
+            ed_public,
+            mldsa_secret,
+            mldsa_public,
         }
     }
 
-    /// The 32-byte public key others pin and verify against.
-    pub fn public(&self) -> [u8; 32] {
-        self.public
+    /// The public identity others pin and verify against: the Ed25519 key
+    /// followed by the ML-DSA-87 key, `ID_LEN` bytes.
+    pub fn public(&self) -> [u8; ID_LEN] {
+        let mut out = [0u8; ID_LEN];
+        out[..ED_PUB].copy_from_slice(&self.ed_public);
+        out[ED_PUB..].copy_from_slice(&self.mldsa_public);
+        out
     }
+}
+
+/// Sign `msg` with both halves of `id`: Ed25519 then ML-DSA-87, packed into
+/// one `SIG_LEN` buffer.
+pub(crate) fn hybrid_sign(id: &Identity, msg: &[u8]) -> [u8; SIG_LEN] {
+    let mut out = [0u8; SIG_LEN];
+    out[..ED_SIG].copy_from_slice(&crypto::sign(&id.ed_secret, msg));
+    out[ED_SIG..].copy_from_slice(&mldsa_sign(msg, &id.mldsa_secret));
+    out
+}
+
+/// Verify a hybrid signature against a public identity. Both the Ed25519
+/// and the ML-DSA-87 signature must check — breaking one scheme is not
+/// enough to forge.
+pub(crate) fn hybrid_verify(id: &[u8; ID_LEN], msg: &[u8], sig: &[u8; SIG_LEN]) -> bool {
+    let mut ed_public = [0u8; ED_PUB];
+    ed_public.copy_from_slice(&id[..ED_PUB]);
+    let mut mldsa_public = [0u8; MLDSA_PK_LEN];
+    mldsa_public.copy_from_slice(&id[ED_PUB..]);
+    let mut ed_sig = [0u8; ED_SIG];
+    ed_sig.copy_from_slice(&sig[..ED_SIG]);
+    crypto::verify(&ed_public, msg, &ed_sig) && mldsa_verify(msg, &sig[ED_SIG..], &mldsa_public)
 }
 
 /// The four keys the handshake derives from the shared secret and the
@@ -143,7 +197,7 @@ pub(crate) fn derive(dh: &[u8; 32], pq: &[u8; 32], th: &[u8; 64]) -> Keys {
     ikm[32..].copy_from_slice(pq);
     let prk = extract_sha512(th, &ikm);
     let mut okm = [0u8; 128];
-    expand_sha512(&prk, b"drawbridge keys v2", &mut okm);
+    expand_sha512(&prk, b"drawbridge keys v3", &mut okm);
     let mut keys = Keys {
         hs_r: [0; 32],
         hs_i: [0; 32],
@@ -192,6 +246,8 @@ const LABEL_X25519: u8 = 1;
 const LABEL_MLKEM_D: u8 = 2;
 const LABEL_MLKEM_Z: u8 = 3;
 const LABEL_MLKEM_M: u8 = 4;
+/// Expands an identity's 32-byte secret into the seed for its ML-DSA key.
+const LABEL_MLDSA_ID: u8 = 5;
 
 /// Run a full handshake between two fixed identities, exchange a message
 /// each way, and confirm tampering is caught. Returns true only if every

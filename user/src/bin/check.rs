@@ -176,7 +176,7 @@ fn run_checks() -> Result<(), &'static str> {
 /// post-quantum-hybrid session.
 fn vault_request() -> Result<(), &'static str> {
     let me = Identity::from_secret(&user::demo_identity::CHECK_SECRET);
-    let vault = crypto::public_key(&user::demo_identity::VAULT_SECRET);
+    let vault = Identity::from_secret(&user::demo_identity::VAULT_SECRET).public();
 
     let (initiator, msg1) = Initiator::start(&me, &ephemeral(b'v'), Some(vault));
     expect(
@@ -239,7 +239,7 @@ fn vault_request() -> Result<(), &'static str> {
 /// all over the Keep's real message passing, fragmented by `send_blob`.
 fn drawbridge_over_ipc() -> Result<(), &'static str> {
     let me = Identity::from_secret(&user::demo_identity::CHECK_SECRET);
-    let supervisor = crypto::public_key(&MICHAEL_SECRET);
+    let supervisor = Identity::from_secret(&MICHAEL_SECRET).public();
 
     let (initiator, msg1) = Initiator::start(&me, &ephemeral(b'C'), Some(supervisor));
     expect(

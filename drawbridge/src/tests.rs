@@ -16,8 +16,8 @@ fn run(
     id_r: &Identity,
     eph_i: &[u8; 32],
     eph_r: &[u8; 32],
-    expect: Option<[u8; 32]>,
-) -> Result<(Session, Session, [u8; 32], [u8; 32]), Error> {
+    expect: Option<[u8; ID_LEN]>,
+) -> Result<(Session, Session, [u8; ID_LEN], [u8; ID_LEN]), Error> {
     let (initiator, msg1) = Initiator::start(id_i, eph_i, expect);
     let (responder, msg2) = Responder::respond(id_r, eph_r, &msg1)?;
     let InitiatorDone {

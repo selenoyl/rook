@@ -62,7 +62,7 @@ fn main(_: u64) -> ! {
 /// ward's badge on success, or None if any step is refused.
 fn serve_drawbridge() -> Option<u64> {
     let me = Identity::from_secret(&user::demo_identity::MICHAEL_SECRET);
-    let ward = crypto::public_key(&CHECK_SECRET);
+    let ward = Identity::from_secret(&CHECK_SECRET).public();
 
     let mut msg1 = [0u8; MSG1_LEN];
     let badge = user::recv_blob(REQUEST, &mut msg1).ok()?;

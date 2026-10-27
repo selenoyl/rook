@@ -23,13 +23,13 @@
 //! the caller fills with real randomness.
 
 use crate::{
-    Error, HS_NONCE, Identity, Keys, LABEL_MLKEM_D, LABEL_MLKEM_M, LABEL_MLKEM_Z, LABEL_X25519,
-    MSG1_LEN, MSG2_LEN, MSG3_LEN, ROLE_INITIATOR, ROLE_RESPONDER, Session, derive, expand_seed,
-    is_zero, signed_message, transcript,
+    Error, HS_NONCE, ID_LEN, Identity, Keys, LABEL_MLKEM_D, LABEL_MLKEM_M, LABEL_MLKEM_Z,
+    LABEL_X25519, MSG1_LEN, MSG2_LEN, MSG3_LEN, PAYLOAD, ROLE_INITIATOR, ROLE_RESPONDER, SIG_LEN,
+    Session, derive, expand_seed, hybrid_sign, hybrid_verify, is_zero, signed_message, transcript,
 };
 use crypto::{
     MLKEM_CT_LEN, MLKEM_DK_LEN, MLKEM_EK_LEN, aead_open, aead_seal, mlkem_decaps, mlkem_encaps,
-    mlkem_keygen, sign, verify, x25519, x25519_base,
+    mlkem_keygen, x25519, x25519_base,
 };
 
 const X_PUB: usize = 32;
@@ -41,14 +41,14 @@ pub struct Initiator {
     x_public: [u8; 32],
     mlkem_ek: [u8; MLKEM_EK_LEN],
     mlkem_dk: [u8; MLKEM_DK_LEN],
-    expect: Option<[u8; 32]>,
+    expect: Option<[u8; ID_LEN]>,
 }
 
 /// What the initiator has once the handshake completes.
 pub struct InitiatorDone {
     pub msg3: [u8; MSG3_LEN],
     pub session: Session,
-    pub peer_identity: [u8; 32],
+    pub peer_identity: [u8; ID_LEN],
 }
 
 impl Initiator {
@@ -58,7 +58,7 @@ impl Initiator {
     pub fn start(
         identity: &Identity,
         seed: &[u8; 32],
-        expect: Option<[u8; 32]>,
+        expect: Option<[u8; ID_LEN]>,
     ) -> (Initiator, [u8; MSG1_LEN]) {
         let x_secret = expand_seed(seed, LABEL_X25519);
         let x_public = x25519_base(&x_secret);
@@ -99,20 +99,20 @@ impl Initiator {
 
         // Open the responder's identity and signature.
         let sealed = &msg2[X_PUB + MLKEM_CT_LEN..];
-        let mut payload = [0u8; 96];
-        payload.copy_from_slice(&sealed[..96]);
+        let mut payload = [0u8; PAYLOAD];
+        payload.copy_from_slice(&sealed[..PAYLOAD]);
         let mut tag = [0u8; 16];
-        tag.copy_from_slice(&sealed[96..112]);
+        tag.copy_from_slice(&sealed[PAYLOAD..PAYLOAD + 16]);
         if !aead_open(&keys.hs_r, &HS_NONCE, &th, &mut payload, &tag) {
             return Err(Error::BadTag);
         }
-        let mut peer_identity = [0u8; 32];
-        peer_identity.copy_from_slice(&payload[0..32]);
-        let mut sig_r = [0u8; 64];
-        sig_r.copy_from_slice(&payload[32..96]);
+        let mut peer_identity = [0u8; ID_LEN];
+        peer_identity.copy_from_slice(&payload[..ID_LEN]);
+        let mut sig_r = [0u8; SIG_LEN];
+        sig_r.copy_from_slice(&payload[ID_LEN..]);
 
         let (msg, len) = signed_message(ROLE_RESPONDER, &th);
-        if !verify(&peer_identity, &msg[..len], &sig_r) {
+        if !hybrid_verify(&peer_identity, &msg[..len], &sig_r) {
             return Err(Error::BadSignature);
         }
         if let Some(pinned) = self.expect
@@ -123,14 +123,14 @@ impl Initiator {
 
         // Build msg3: our identity and signature, sealed.
         let (msg, len) = signed_message(ROLE_INITIATOR, &th);
-        let sig_i = sign(&self.identity.secret, &msg[..len]);
-        let mut payload = [0u8; 96];
-        payload[0..32].copy_from_slice(&self.identity.public());
-        payload[32..96].copy_from_slice(&sig_i);
+        let sig_i = hybrid_sign(&self.identity, &msg[..len]);
+        let mut payload = [0u8; PAYLOAD];
+        payload[..ID_LEN].copy_from_slice(&self.identity.public());
+        payload[ID_LEN..].copy_from_slice(&sig_i);
         let tag = aead_seal(&keys.hs_i, &HS_NONCE, &th, &mut payload);
         let mut msg3 = [0u8; MSG3_LEN];
-        msg3[0..96].copy_from_slice(&payload);
-        msg3[96..112].copy_from_slice(&tag);
+        msg3[..PAYLOAD].copy_from_slice(&payload);
+        msg3[PAYLOAD..PAYLOAD + 16].copy_from_slice(&tag);
 
         Ok(InitiatorDone {
             msg3,
@@ -149,7 +149,7 @@ pub struct Responder {
 /// What the responder has once the handshake completes.
 pub struct ResponderDone {
     pub session: Session,
-    pub peer_identity: [u8; 32],
+    pub peer_identity: [u8; ID_LEN],
 }
 
 impl Responder {
@@ -178,18 +178,18 @@ impl Responder {
 
         // Seal our identity and signature over the transcript.
         let (msg, len) = signed_message(ROLE_RESPONDER, &th);
-        let sig_r = sign(&identity.secret, &msg[..len]);
-        let mut payload = [0u8; 96];
-        payload[0..32].copy_from_slice(&identity.public());
-        payload[32..96].copy_from_slice(&sig_r);
+        let sig_r = hybrid_sign(identity, &msg[..len]);
+        let mut payload = [0u8; PAYLOAD];
+        payload[..ID_LEN].copy_from_slice(&identity.public());
+        payload[ID_LEN..].copy_from_slice(&sig_r);
         let tag = aead_seal(&keys.hs_r, &HS_NONCE, &th, &mut payload);
 
         let mut msg2 = [0u8; MSG2_LEN];
         msg2[..X_PUB].copy_from_slice(&e_r);
         msg2[X_PUB..X_PUB + MLKEM_CT_LEN].copy_from_slice(&ct);
         let sealed = &mut msg2[X_PUB + MLKEM_CT_LEN..];
-        sealed[..96].copy_from_slice(&payload);
-        sealed[96..112].copy_from_slice(&tag);
+        sealed[..PAYLOAD].copy_from_slice(&payload);
+        sealed[PAYLOAD..PAYLOAD + 16].copy_from_slice(&tag);
 
         Ok((Responder { th, keys }, msg2))
     }
@@ -198,20 +198,20 @@ impl Responder {
     /// caller inspects `peer_identity` to decide whether that initiator is
     /// welcome.
     pub fn finish(self, msg3: &[u8; MSG3_LEN]) -> Result<ResponderDone, Error> {
-        let mut payload = [0u8; 96];
-        payload.copy_from_slice(&msg3[0..96]);
+        let mut payload = [0u8; PAYLOAD];
+        payload.copy_from_slice(&msg3[..PAYLOAD]);
         let mut tag = [0u8; 16];
-        tag.copy_from_slice(&msg3[96..112]);
+        tag.copy_from_slice(&msg3[PAYLOAD..PAYLOAD + 16]);
         if !aead_open(&self.keys.hs_i, &HS_NONCE, &self.th, &mut payload, &tag) {
             return Err(Error::BadTag);
         }
-        let mut peer_identity = [0u8; 32];
-        peer_identity.copy_from_slice(&payload[0..32]);
-        let mut sig_i = [0u8; 64];
-        sig_i.copy_from_slice(&payload[32..96]);
+        let mut peer_identity = [0u8; ID_LEN];
+        peer_identity.copy_from_slice(&payload[..ID_LEN]);
+        let mut sig_i = [0u8; SIG_LEN];
+        sig_i.copy_from_slice(&payload[ID_LEN..]);
 
         let (msg, len) = signed_message(ROLE_INITIATOR, &self.th);
-        if !verify(&peer_identity, &msg[..len], &sig_i) {
+        if !hybrid_verify(&peer_identity, &msg[..len], &sig_i) {
             return Err(Error::BadSignature);
         }
 

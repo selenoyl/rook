@@ -98,7 +98,7 @@ fn disk_self_test(ata: &mut Ata) {
 /// `(status, length, data)`.
 fn serve(mut fs: Option<Vault<Ata>>) -> ! {
     let me = Identity::from_secret(&VAULT_SECRET);
-    let client = crypto::public_key(&CHECK_SECRET);
+    let client = Identity::from_secret(&CHECK_SECRET).public();
     let mut session = match handshake(&me, client) {
         Some(session) => {
             let _ = user::log("drawbridge: secure channel open with the client");
@@ -149,7 +149,7 @@ fn serve(mut fs: Option<Vault<Ata>>) -> ! {
 
 /// Act as the Drawbridge responder for the client's handshake, pinning its
 /// identity.
-fn handshake(me: &Identity, client: [u8; 32]) -> Option<Session> {
+fn handshake(me: &Identity, client: [u8; drawbridge::ID_LEN]) -> Option<Session> {
     let mut msg1 = [0u8; MSG1_LEN];
     user::recv_blob(REQUEST, &mut msg1).ok()?;
     let (responder, msg2) = Responder::respond(me, &ephemeral(b'V'), &msg1).ok()?;
