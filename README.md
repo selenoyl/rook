@@ -127,25 +127,31 @@ The protocol two Rook tasks (eventually two angels) use to talk securely.
 Each holds a long-term Ed25519 identity; a three-message handshake gives
 them a shared, encrypted session:
 
-- A fresh **ephemeral X25519** key each way, so the session key is
-  **forward-secret**: recording the traffic and later stealing an identity
-  key still doesn't reveal it.
-- Each side **signs the transcript** (both ephemeral keys) with its
-  identity key — **mutual authentication**, bound to this exact exchange.
-  The identities and signatures travel encrypted, so an eavesdropper
-  learns neither, and a valid tag also confirms the peer agreed the same
-  key.
+- A **hybrid, post-quantum key exchange**: each side contributes a fresh
+  **ephemeral X25519** key, and the initiator also offers an ephemeral
+  **ML-KEM-768** encapsulation key that the responder encapsulates to. The
+  session key is derived from *both* shared secrets, so recovering it means
+  breaking a classical **and** a post-quantum problem. The ephemeral keys
+  are per-session, so the session stays **forward-secret** even if an
+  identity key is later stolen.
+- Each side **signs the transcript** — every public value of the handshake
+  — with its identity key, for **mutual authentication** bound to this
+  exact exchange. The identities and signatures travel encrypted, so an
+  eavesdropper learns neither, and a valid tag also confirms the peer
+  agreed the same key. (Identity authentication is still classical Ed25519;
+  post-quantum signatures, SLH-DSA, come next.)
 - The data channel numbers every message with a per-direction counter, so
   a **replayed or reordered** message is refused.
 
-This is a SIGMA-style design, the same shape as the handshakes in TLS 1.3
-and Noise, built only from `crypto` above. `drawbridge::self_test()` runs a
-full handshake and sealed exchange **in ring 3 at every boot**, and the
-host tests additionally prove tampering, replay, a swapped ephemeral, a
+This is a SIGMA-style design hybridized with ML-KEM, the same shape the
+post-quantum work in TLS and Noise is taking, built only from `crypto`
+above. `drawbridge::self_test()` runs a full handshake and sealed exchange
+**in ring 3 at every boot**, and the host tests additionally prove
+tampering (of both the X25519 and the ML-KEM parts), replay, reorder, a
 pinned-identity mismatch and a low-order point are all caught. The caller
-supplies the random secret keys — in the running demo, Michael and `check`
-draw their ephemeral keys from the Keep's CSPRNG. Like the crypto beneath
-it, the protocol is **not audited**.
+supplies the random seed — in the running demo, Michael and `check` draw
+theirs from the Keep's CSPRNG. Like the crypto beneath it, the protocol is
+**not audited**.
 
 And it already runs **between two separate tasks over real endpoints**: at
 every boot, `check` (the initiator) and `michael` (the responder) run the
@@ -155,8 +161,8 @@ identity — and trade a sealed message, with a small fragmentation layer
 register-sized IPC packets. The two use fixed demo identity keys, clearly
 marked as such; real ones come from per-device entropy and Castling.
 
-ML-KEM-768 is in; SLH-DSA (post-quantum signatures) comes next, and then a
-hybrid Drawbridge handshake that runs X25519 and ML-KEM together.
+The key exchange is already hybrid; **SLH-DSA** (post-quantum signatures)
+comes next, to make the identity authentication quantum-resistant too.
 
 ## Storage: the Vault (`vault/`)
 

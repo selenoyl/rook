@@ -35,15 +35,23 @@ mod session;
 pub use handshake::{Initiator, InitiatorDone, Responder, ResponderDone};
 pub use session::Session;
 
-use crypto::{Sha512, expand_sha512, extract_sha512};
+use crypto::{MLKEM_CT_LEN, MLKEM_EK_LEN, Sha512, expand_sha512, extract_sha512, shake256};
+
+/// Public ephemeral sizes.
+const X_PUB: usize = 32; // X25519 public key
+const SEALED: usize = 96 + 16; // seal(identity 32 || signature 64) + tag
 
 /// Bytes on the wire for the three handshake messages.
-pub const MSG1_LEN: usize = 32; // e_i
-pub const MSG2_LEN: usize = 32 + 96 + 16; // e_r || seal(id_r || sig_r)
-pub const MSG3_LEN: usize = 96 + 16; // seal(id_i || sig_i)
+/// msg1 = e_i ‖ ML-KEM ek
+pub const MSG1_LEN: usize = X_PUB + MLKEM_EK_LEN;
+/// msg2 = e_r ‖ ML-KEM ciphertext ‖ seal(id_r ‖ sig_r)
+pub const MSG2_LEN: usize = X_PUB + MLKEM_CT_LEN + SEALED;
+/// msg3 = seal(id_i ‖ sig_i)
+pub const MSG3_LEN: usize = SEALED;
 
-/// Domain-separation label mixed into the transcript hash.
-const PROTO: &[u8] = b"rook-drawbridge-v1";
+/// Domain-separation label mixed into the transcript hash. v2 is the
+/// hybrid X25519 + ML-KEM-768 handshake.
+const PROTO: &[u8] = b"rook-drawbridge-v2-hybrid";
 /// Role labels prefixed to the signed transcript, so a responder's
 /// signature can never be replayed as an initiator's, or the reverse.
 const ROLE_RESPONDER: &[u8] = b"drawbridge responder";
@@ -105,23 +113,37 @@ pub(crate) struct Keys {
     pub i2r: [u8; 32],
 }
 
-/// SHA-512 over the protocol label and both ephemeral public keys — the
-/// transcript both sides sign and mix into the key schedule.
-pub(crate) fn transcript(e_i: &[u8; 32], e_r: &[u8; 32]) -> [u8; 64] {
+/// SHA-512 over the protocol label and every public value of the
+/// handshake — the two X25519 ephemerals, the ML-KEM encapsulation key and
+/// its ciphertext. Both sides sign it and mix it into the key schedule, so
+/// a tampered handshake gives a different transcript and fails.
+pub(crate) fn transcript(
+    e_i: &[u8; 32],
+    ek: &[u8; MLKEM_EK_LEN],
+    e_r: &[u8; 32],
+    ct: &[u8; MLKEM_CT_LEN],
+) -> [u8; 64] {
     let mut h = Sha512::new();
     h.update(PROTO);
     h.update(e_i);
+    h.update(ek);
     h.update(e_r);
+    h.update(ct);
     h.finalize()
 }
 
-/// HKDF-SHA-512 the shared secret and transcript into the four session
-/// keys. The transcript is the salt, so every key depends on the exact
-/// ephemeral keys exchanged.
-pub(crate) fn derive(dh: &[u8; 32], th: &[u8; 64]) -> Keys {
-    let prk = extract_sha512(th, dh);
+/// HKDF-SHA-512 the two shared secrets and the transcript into the four
+/// session keys. The input keying material is the X25519 secret followed
+/// by the ML-KEM secret, so breaking the session needs breaking *both* a
+/// classical and a post-quantum problem; the transcript is the salt, so
+/// every key is bound to the exact handshake.
+pub(crate) fn derive(dh: &[u8; 32], pq: &[u8; 32], th: &[u8; 64]) -> Keys {
+    let mut ikm = [0u8; 64];
+    ikm[..32].copy_from_slice(dh);
+    ikm[32..].copy_from_slice(pq);
+    let prk = extract_sha512(th, &ikm);
     let mut okm = [0u8; 128];
-    expand_sha512(&prk, b"drawbridge keys v1", &mut okm);
+    expand_sha512(&prk, b"drawbridge keys v2", &mut okm);
     let mut keys = Keys {
         hs_r: [0; 32],
         hs_i: [0; 32],
@@ -153,6 +175,23 @@ pub(crate) fn is_zero(x: &[u8; 32]) -> bool {
     }
     acc == 0
 }
+
+/// Expand a 32-byte handshake seed into one ephemeral secret, domain-
+/// separated by `label`, with SHAKE256. Each side derives the several
+/// secrets it needs (X25519 and ML-KEM) from its single random seed.
+pub(crate) fn expand_seed(seed: &[u8; 32], label: u8) -> [u8; 32] {
+    let mut input = [0u8; 33];
+    input[..32].copy_from_slice(seed);
+    input[32] = label;
+    let mut out = [0u8; 32];
+    shake256(&input, &mut out);
+    out
+}
+
+const LABEL_X25519: u8 = 1;
+const LABEL_MLKEM_D: u8 = 2;
+const LABEL_MLKEM_Z: u8 = 3;
+const LABEL_MLKEM_M: u8 = 4;
 
 /// Run a full handshake between two fixed identities, exchange a message
 /// each way, and confirm tampering is caught. Returns true only if every

@@ -159,27 +159,38 @@ fn tampered_handshake_is_refused() {
     let Ok((_responder, mut msg2)) = Responder::respond(&id_r, &[12; 32], &msg1) else {
         panic!("respond failed");
     };
-    // Flip a byte in the responder's sealed identity: the initiator must
-    // not accept it.
-    msg2[40] ^= 1;
+    // Flip a byte in the responder's sealed identity (the last field of
+    // msg2): the initiator must not accept it.
+    let last = msg2.len() - 1;
+    msg2[last] ^= 1;
     assert_eq!(initiator.finish(&msg2).err(), Some(Error::BadTag));
 }
 
 #[test]
 fn swapped_ephemeral_breaks_the_handshake() {
-    // If a man in the middle replaces the initiator's ephemeral key, the
-    // transcripts differ and the responder's signature won't verify for
-    // the initiator.
+    // If a man in the middle alters the initiator's ephemeral, the
+    // transcripts and the agreed key differ, so msg2 won't open for the
+    // initiator.
     let (id_i, id_r) = ids();
-    let (initiator, _msg1) = Initiator::start(&id_i, &[13; 32], Some(id_r.public()));
-    // Responder answers a *different* msg1 (attacker's ephemeral).
-    let attacker_e = crypto::x25519_base(&[99; 32]);
-    let Ok((_responder, msg2)) = Responder::respond(&id_r, &[14; 32], &attacker_e) else {
+    let (initiator, mut msg1) = Initiator::start(&id_i, &[13; 32], Some(id_r.public()));
+    msg1[0] ^= 1; // flip a byte of the initiator's X25519 ephemeral
+    let Ok((_responder, msg2)) = Responder::respond(&id_r, &[14; 32], &msg1) else {
         panic!("respond failed");
     };
-    // The initiator computes a different transcript, so the key the
-    // responder used won't open msg2.
     assert!(initiator.finish(&msg2).is_err());
+}
+
+#[test]
+fn tampered_mlkem_ciphertext_breaks_the_handshake() {
+    // Flipping a byte of the ML-KEM ciphertext in msg2 changes the
+    // post-quantum secret the initiator decapsulates, so the keys diverge.
+    let (id_i, id_r) = ids();
+    let (initiator, msg1) = Initiator::start(&id_i, &[21; 32], Some(id_r.public()));
+    let Ok((_responder, mut msg2)) = Responder::respond(&id_r, &[22; 32], &msg1) else {
+        panic!("respond failed");
+    };
+    msg2[40] ^= 1; // a byte inside the ML-KEM ciphertext
+    assert_eq!(initiator.finish(&msg2).err(), Some(Error::BadTag));
 }
 
 #[test]

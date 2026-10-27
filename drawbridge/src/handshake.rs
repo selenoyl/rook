@@ -1,37 +1,50 @@
-//! The three-message handshake that establishes a [`Session`].
+//! The three-message hybrid handshake that establishes a [`Session`].
 //!
 //! ```text
-//!   Initiator                                   Responder
-//!   ---------                                   ---------
-//!   e_i  ------------------- msg1 ------------------>
-//!                            msg2    e_r, seal(id_r, sig_r)
-//!        <------------------------------------------
-//!   msg3    seal(id_i, sig_i)
-//!        ------------------------------------------->
+//!   Initiator                                         Responder
+//!   ---------                                         ---------
+//!   e_i, mlkem_ek  ---------------- msg1 ---------------->
+//!                  msg2   e_r, mlkem_ct, seal(id_r, sig_r)
+//!        <-----------------------------------------------
+//!   msg3  seal(id_i, sig_i)
+//!        ----------------------------------------------->
 //! ```
 //!
-//! `e_*` are ephemeral X25519 public keys; `id_*` are Ed25519 identity
-//! public keys; `sig_*` are signatures over the transcript (both
-//! ephemerals). The identities and signatures in msg2/msg3 are sealed with
-//! ChaCha20-Poly1305 under keys derived from the shared secret, so they
-//! are confidential and a good tag confirms the peer agreed the same key.
+//! `e_*` are ephemeral X25519 public keys; `mlkem_ek`/`mlkem_ct` are an
+//! ephemeral ML-KEM-768 encapsulation key and the ciphertext encapsulated
+//! to it. The agreed key is derived from **both** the X25519 secret and
+//! the ML-KEM secret, so an attacker must break classical *and*
+//! post-quantum problems. `id_*` are Ed25519 identity keys and `sig_*`
+//! signatures over the transcript (every public value above); the
+//! identities and signatures travel sealed, so they are confidential and a
+//! good tag confirms the peer agreed the same key.
+//!
+//! Each side draws all its ephemeral secrets from one 32-byte seed, which
+//! the caller fills with real randomness.
 
 use crate::{
-    Error, HS_NONCE, Identity, Keys, MSG1_LEN, MSG2_LEN, MSG3_LEN, ROLE_INITIATOR, ROLE_RESPONDER,
-    Session, derive, is_zero, signed_message, transcript,
+    Error, HS_NONCE, Identity, Keys, LABEL_MLKEM_D, LABEL_MLKEM_M, LABEL_MLKEM_Z, LABEL_X25519,
+    MSG1_LEN, MSG2_LEN, MSG3_LEN, ROLE_INITIATOR, ROLE_RESPONDER, Session, derive, expand_seed,
+    is_zero, signed_message, transcript,
 };
-use crypto::{aead_open, aead_seal, sign, verify, x25519, x25519_base};
+use crypto::{
+    MLKEM_CT_LEN, MLKEM_DK_LEN, MLKEM_EK_LEN, aead_open, aead_seal, mlkem_decaps, mlkem_encaps,
+    mlkem_keygen, sign, verify, x25519, x25519_base,
+};
+
+const X_PUB: usize = 32;
 
 /// The initiator's state between sending msg1 and receiving msg2.
 pub struct Initiator {
     identity: Identity,
-    eph_secret: [u8; 32],
-    eph_public: [u8; 32],
+    x_secret: [u8; 32],
+    x_public: [u8; 32],
+    mlkem_ek: [u8; MLKEM_EK_LEN],
+    mlkem_dk: [u8; MLKEM_DK_LEN],
     expect: Option<[u8; 32]>,
 }
 
-/// What the initiator has once the handshake completes: the final message
-/// to send, the session, and the identity the responder proved.
+/// What the initiator has once the handshake completes.
 pub struct InitiatorDone {
     pub msg3: [u8; MSG3_LEN],
     pub session: Session,
@@ -39,42 +52,57 @@ pub struct InitiatorDone {
 }
 
 impl Initiator {
-    /// Begin a handshake. Returns the state and msg1 to send. `eph_secret`
-    /// is 32 fresh random bytes; `expect` optionally pins the responder's
-    /// identity, so a handshake with anyone else is refused.
+    /// Begin a handshake. `seed` is 32 fresh random bytes; `expect`
+    /// optionally pins the responder's identity. Returns the state and
+    /// msg1 (the X25519 ephemeral and the ML-KEM encapsulation key).
     pub fn start(
         identity: &Identity,
-        eph_secret: &[u8; 32],
+        seed: &[u8; 32],
         expect: Option<[u8; 32]>,
     ) -> (Initiator, [u8; MSG1_LEN]) {
-        let eph_public = x25519_base(eph_secret);
+        let x_secret = expand_seed(seed, LABEL_X25519);
+        let x_public = x25519_base(&x_secret);
+        let d = expand_seed(seed, LABEL_MLKEM_D);
+        let z = expand_seed(seed, LABEL_MLKEM_Z);
+        let (mlkem_ek, mlkem_dk) = mlkem_keygen(&d, &z);
+
+        let mut msg1 = [0u8; MSG1_LEN];
+        msg1[..X_PUB].copy_from_slice(&x_public);
+        msg1[X_PUB..].copy_from_slice(&mlkem_ek);
+
         let state = Initiator {
             identity: identity.clone(),
-            eph_secret: *eph_secret,
-            eph_public,
+            x_secret,
+            x_public,
+            mlkem_ek,
+            mlkem_dk,
             expect,
         };
-        (state, eph_public)
+        (state, msg1)
     }
 
-    /// Consume msg2: agree the key, verify the responder, and produce msg3
-    /// and the session.
+    /// Consume msg2: agree the hybrid key, verify the responder, and
+    /// produce msg3 and the session.
     pub fn finish(self, msg2: &[u8; MSG2_LEN]) -> Result<InitiatorDone, Error> {
         let mut e_r = [0u8; 32];
-        e_r.copy_from_slice(&msg2[0..32]);
+        e_r.copy_from_slice(&msg2[..X_PUB]);
+        let mut ct = [0u8; MLKEM_CT_LEN];
+        ct.copy_from_slice(&msg2[X_PUB..X_PUB + MLKEM_CT_LEN]);
 
-        let dh = x25519(&self.eph_secret, &e_r);
+        let dh = x25519(&self.x_secret, &e_r);
         if is_zero(&dh) {
             return Err(Error::WeakKey);
         }
-        let th = transcript(&self.eph_public, &e_r);
-        let keys = derive(&dh, &th);
+        let pq = mlkem_decaps(&self.mlkem_dk, &ct);
+        let th = transcript(&self.x_public, &self.mlkem_ek, &e_r, &ct);
+        let keys = derive(&dh, &pq, &th);
 
         // Open the responder's identity and signature.
+        let sealed = &msg2[X_PUB + MLKEM_CT_LEN..];
         let mut payload = [0u8; 96];
-        payload.copy_from_slice(&msg2[32..128]);
+        payload.copy_from_slice(&sealed[..96]);
         let mut tag = [0u8; 16];
-        tag.copy_from_slice(&msg2[128..144]);
+        tag.copy_from_slice(&sealed[96..112]);
         if !aead_open(&keys.hs_r, &HS_NONCE, &th, &mut payload, &tag) {
             return Err(Error::BadTag);
         }
@@ -118,30 +146,35 @@ pub struct Responder {
     keys: Keys,
 }
 
-/// What the responder has once the handshake completes: the session and
-/// the identity the initiator proved.
+/// What the responder has once the handshake completes.
 pub struct ResponderDone {
     pub session: Session,
     pub peer_identity: [u8; 32],
 }
 
 impl Responder {
-    /// Consume msg1 and produce msg2 and the pending state. `eph_secret`
-    /// is 32 fresh random bytes.
+    /// Consume msg1, encapsulate to the ML-KEM key, and produce msg2 and
+    /// the pending state. `seed` is 32 fresh random bytes.
     pub fn respond(
         identity: &Identity,
-        eph_secret: &[u8; 32],
+        seed: &[u8; 32],
         msg1: &[u8; MSG1_LEN],
     ) -> Result<(Responder, [u8; MSG2_LEN]), Error> {
-        let e_i = *msg1;
-        let e_r = x25519_base(eph_secret);
+        let mut e_i = [0u8; 32];
+        e_i.copy_from_slice(&msg1[..X_PUB]);
+        let mut ek = [0u8; MLKEM_EK_LEN];
+        ek.copy_from_slice(&msg1[X_PUB..]);
 
-        let dh = x25519(eph_secret, &e_i);
+        let x_secret = expand_seed(seed, LABEL_X25519);
+        let e_r = x25519_base(&x_secret);
+        let dh = x25519(&x_secret, &e_i);
         if is_zero(&dh) {
             return Err(Error::WeakKey);
         }
-        let th = transcript(&e_i, &e_r);
-        let keys = derive(&dh, &th);
+        let m = expand_seed(seed, LABEL_MLKEM_M);
+        let (ct, pq) = mlkem_encaps(&ek, &m);
+        let th = transcript(&e_i, &ek, &e_r, &ct);
+        let keys = derive(&dh, &pq, &th);
 
         // Seal our identity and signature over the transcript.
         let (msg, len) = signed_message(ROLE_RESPONDER, &th);
@@ -152,9 +185,11 @@ impl Responder {
         let tag = aead_seal(&keys.hs_r, &HS_NONCE, &th, &mut payload);
 
         let mut msg2 = [0u8; MSG2_LEN];
-        msg2[0..32].copy_from_slice(&e_r);
-        msg2[32..128].copy_from_slice(&payload);
-        msg2[128..144].copy_from_slice(&tag);
+        msg2[..X_PUB].copy_from_slice(&e_r);
+        msg2[X_PUB..X_PUB + MLKEM_CT_LEN].copy_from_slice(&ct);
+        let sealed = &mut msg2[X_PUB + MLKEM_CT_LEN..];
+        sealed[..96].copy_from_slice(&payload);
+        sealed[96..112].copy_from_slice(&tag);
 
         Ok((Responder { th, keys }, msg2))
     }
