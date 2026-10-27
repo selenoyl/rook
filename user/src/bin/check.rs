@@ -151,36 +151,71 @@ fn run_checks() -> Result<(), &'static str> {
     drawbridge_over_ipc()?;
     let _ = user::log("drawbridge over IPC: sealed channel with the supervisor");
 
-    // The storage service: ask the Vault for a file over an endpoint and
-    // confirm its contents.
+    // The storage service: open a Drawbridge session with the Vault and
+    // read a file over it — encrypted and authenticated end to end.
     vault_request()?;
-    let _ = user::log("vault: read motd over IPC, contents verified");
+    let _ = user::log("vault: read motd over a sealed Drawbridge channel, verified");
     Ok(())
 }
 
-/// Ask the Vault for the "motd" file over the request endpoint and confirm
-/// its contents, proving a user-space storage service reached via Writs.
+/// Open a Drawbridge session with the Vault, then ask it for the "motd"
+/// file over that sealed channel and confirm the bytes — a user-space
+/// storage service reached through a capability and an authenticated,
+/// post-quantum-hybrid session.
 fn vault_request() -> Result<(), &'static str> {
+    let me = Identity::from_secret(&user::demo_identity::CHECK_SECRET);
+    let vault = crypto::public_key(&user::demo_identity::VAULT_SECRET);
+
+    let (initiator, msg1) = Initiator::start(&me, &ephemeral(b'v'), Some(vault));
+    expect(
+        user::send_blob(TO_VAULT, &msg1).is_ok(),
+        "opening a channel to the vault",
+    )?;
+    let mut msg2 = [0u8; MSG2_LEN];
+    expect(
+        user::recv_blob(FROM_VAULT, &mut msg2).is_ok(),
+        "the vault's handshake reply",
+    )?;
+    let InitiatorDone {
+        msg3,
+        mut session,
+        peer_identity,
+    } = initiator.finish(&msg2).map_err(|_| "the vault handshake")?;
+    expect(peer_identity == vault, "the vault's identity")?;
+    expect(
+        user::send_blob(TO_VAULT, &msg3).is_ok(),
+        "finishing the vault handshake",
+    )?;
+
+    // Sealed request: the 16-byte name, then its tag.
     let mut name = [0u8; 16];
     name[..4].copy_from_slice(b"motd");
+    let tag = session.seal(&mut name).map_err(|_| "sealing the request")?;
+    let mut request = [0u8; 32];
+    request[..16].copy_from_slice(&name);
+    request[16..].copy_from_slice(&tag);
     expect(
-        user::send_blob(TO_VAULT, &name).is_ok(),
-        "requesting a file from the vault",
+        user::send_blob(TO_VAULT, &request).is_ok(),
+        "sending the sealed request",
     )?;
-    let header = match user::recv(FROM_VAULT) {
-        Ok((_, words)) => words,
-        Err(_) => return Err("hearing back from the vault"),
-    };
-    expect(header[0] == 0, "the vault found the file")?;
-    let len = header[1] as usize;
-    let mut buf = [0u8; 64];
-    expect(len <= buf.len(), "the served file fits")?;
+
+    // Sealed reply: 64-byte body (status, length, data) then its tag.
+    let mut incoming = [0u8; 80];
     expect(
-        user::recv_blob(FROM_VAULT, &mut buf[..len]).is_ok(),
-        "reading the file from the vault",
+        user::recv_blob(FROM_VAULT, &mut incoming).is_ok(),
+        "the vault's sealed reply",
     )?;
+    let mut reply = [0u8; 64];
+    let mut rtag = [0u8; 16];
+    reply.copy_from_slice(&incoming[..64]);
+    rtag.copy_from_slice(&incoming[64..]);
+    session
+        .open(&mut reply, &rtag)
+        .map_err(|_| "opening the sealed reply")?;
+    expect(reply[0] == 0, "the vault found the file")?;
+    let len = reply[1] as usize;
     expect(
-        &buf[..len] == b"The Keep holds. Rook stands watch.\n",
+        len <= 62 && &reply[2..2 + len] == b"The Keep holds. Rook stands watch.\n",
         "the vault served the right bytes",
     )?;
     Ok(())

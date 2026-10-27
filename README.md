@@ -194,12 +194,16 @@ reaching the disk only through a capability.
   program: it reaches the controller only through the Keep's I/O system
   calls, holding an I/O Writ for the primary bus's ports and nothing else.
 - The `vault` task puts the two together — it mounts the disk and serves
-  files to other tasks over an endpoint. At boot it reports the disk's
-  geometry and files, and `check` reads one back over IPC.
+  files to other tasks **over a Drawbridge session**: a client opens the
+  hybrid handshake, then every request and reply is sealed, so storage is
+  encrypted and authenticated end to end. At boot the Vault reports the
+  disk's geometry and files, and `check` reads one back over the sealed
+  channel.
 
 So the only code that touches the disk hardware is a ring-3 task the Keep
-could end like any other; a bug there cannot corrupt the Keep. The on-disk
-image is built by `tools/mkvault.py` and attached to QEMU as an IDE drive.
+could end like any other; a bug there cannot corrupt the Keep, and the
+bytes it serves never cross an endpoint in the clear. The on-disk image is
+built by `tools/mkvault.py` and attached to QEMU as an IDE drive.
 
 ## Build, run, test
 
@@ -289,9 +293,9 @@ builds on top:
 1. **Finish the post-quantum suite**: SLH-DSA signatures beside ML-KEM-768,
    then a **hybrid Drawbridge** handshake combining X25519 and ML-KEM so a
    recorded session stays secret even against a future quantum computer.
-2. **A fuller Vault**: writes and deletion that reclaim space, and
-   carrying its files over a Drawbridge session so storage is encrypted
-   and authenticated end to end.
+2. **A fuller Vault**: writes and deletion from a client over the sealed
+   channel, and freed-space reclamation, so the disk is read-write, not
+   just read-mostly.
 3. The angels as real tasks (Michael spawning, watching and restarting
    the others, then Gabriel and Raphael), which also needs runtime task
    spawn and reclaiming an exited task's slot.

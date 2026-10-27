@@ -16,15 +16,19 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
+use drawbridge::{Identity, MSG1_LEN, MSG3_LEN, Responder, ResponderDone, Session};
 use user::ata::Ata;
+use user::demo_identity::{CHECK_SECRET, VAULT_SECRET, ephemeral};
 use vault::{NAME_LEN, Vault};
 
 const DISK: u64 = 0;
 const REQUEST: u64 = 1;
 const REPLY: u64 = 2;
 
-/// The largest file the Vault serves in one reply, bounding its buffer.
-const MAX_FILE: usize = 512;
+/// The sealed reply: status byte, length byte, then up to this many bytes
+/// of file. 64 total keeps it to two IPC messages plus a tag.
+const REPLY_BODY: usize = 64;
+const REPLY_DATA: usize = REPLY_BODY - 2;
 
 user::program!(main);
 
@@ -59,32 +63,82 @@ fn mount() -> Option<Vault<Ata>> {
     }
 }
 
-/// Answer file requests forever. Each request is a name; the reply is a
-/// header message `(status, length)` — status 0 for a hit, 1 for a miss —
-/// and, on a hit, the file's bytes. Every request gets an answer, even
-/// without a filesystem, so a client never blocks waiting for one.
+/// Open a Drawbridge session with the client, then answer sealed file
+/// requests over it: every request and reply is encrypted and
+/// authenticated end to end, so even the bytes on the endpoints are
+/// confidential. A request is a sealed 16-byte name; a reply is a sealed
+/// `(status, length, data)`.
 fn serve(mut fs: Option<Vault<Ata>>) -> ! {
-    let _ = user::log("serving files over the request endpoint");
-    let mut file = [0u8; MAX_FILE];
+    let me = Identity::from_secret(&VAULT_SECRET);
+    let client = crypto::public_key(&CHECK_SECRET);
+    let mut session = match handshake(&me, client) {
+        Some(session) => {
+            let _ = user::log("drawbridge: secure channel open with the client");
+            session
+        }
+        None => {
+            let _ = user::log("drawbridge: could not open a channel with the client");
+            idle();
+        }
+    };
+
     loop {
-        let mut name = [0u8; NAME_LEN];
-        if user::recv_blob(REQUEST, &mut name).is_err() {
+        let mut framed = [0u8; NAME_LEN + 16];
+        if user::recv_blob(REQUEST, &mut framed).is_err() {
             continue;
         }
-        let used = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-        let served = fs
-            .as_mut()
-            .and_then(|v| v.read(&name[..used], &mut file).ok());
-        match served {
-            Some(len) => {
-                let len = core::cmp::min(len, file.len());
-                let _ = user::send(REPLY, [0, len as u64, 0, 0]);
-                let _ = user::send_blob(REPLY, &file[..len]);
-            }
-            None => {
-                let _ = user::send(REPLY, [1, 0, 0, 0]);
-            }
+        let mut name = [0u8; NAME_LEN];
+        let mut tag = [0u8; 16];
+        name.copy_from_slice(&framed[..NAME_LEN]);
+        tag.copy_from_slice(&framed[NAME_LEN..]);
+        if session.open(&mut name, &tag).is_err() {
+            continue;
         }
+
+        let used = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        let mut reply = [0u8; REPLY_BODY];
+        let mut body = [0u8; REPLY_DATA];
+        match fs
+            .as_mut()
+            .and_then(|v| v.read(&name[..used], &mut body).ok())
+        {
+            Some(len) if len <= REPLY_DATA => {
+                reply[0] = 0;
+                reply[1] = len as u8;
+                reply[2..2 + len].copy_from_slice(&body[..len]);
+            }
+            _ => reply[0] = 1,
+        }
+        let Ok(rtag) = session.seal(&mut reply) else {
+            idle();
+        };
+        let mut out = [0u8; REPLY_BODY + 16];
+        out[..REPLY_BODY].copy_from_slice(&reply);
+        out[REPLY_BODY..].copy_from_slice(&rtag);
+        let _ = user::send_blob(REPLY, &out);
+    }
+}
+
+/// Act as the Drawbridge responder for the client's handshake, pinning its
+/// identity.
+fn handshake(me: &Identity, client: [u8; 32]) -> Option<Session> {
+    let mut msg1 = [0u8; MSG1_LEN];
+    user::recv_blob(REQUEST, &mut msg1).ok()?;
+    let (responder, msg2) = Responder::respond(me, &ephemeral(b'V'), &msg1).ok()?;
+    user::send_blob(REPLY, &msg2).ok()?;
+    let mut msg3 = [0u8; MSG3_LEN];
+    user::recv_blob(REQUEST, &mut msg3).ok()?;
+    let ResponderDone {
+        session,
+        peer_identity,
+    } = responder.finish(&msg3).ok()?;
+    (peer_identity == client).then_some(session)
+}
+
+/// Nothing more to serve: sleep forever.
+fn idle() -> ! {
+    loop {
+        let _ = user::sleep(1000);
     }
 }
 

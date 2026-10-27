@@ -221,6 +221,8 @@ pub mod demo_identity {
     pub const MICHAEL_SECRET: [u8; 32] = [0x4d; 32];
     /// The check task's demo identity secret.
     pub const CHECK_SECRET: [u8; 32] = [0x43; 32];
+    /// The Vault's demo identity secret.
+    pub const VAULT_SECRET: [u8; 32] = [0x56; 32];
 
     /// A fresh ephemeral secret for one handshake, drawn from the Keep's
     /// CSPRNG. `role` is mixed in only as a fallback, so the two ends still
