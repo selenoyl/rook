@@ -74,12 +74,13 @@ are built from here, as user programs.
   the Keep carries on; only a fault in the Keep's own code stops the
   machine. The log names the faulting address, whether it hit a stack
   guard, and which task was running.
-- Starts **Michael**, the supervisor, as the first user task. He hears a
-  task report in over an endpoint, checks on it through a Task Writ, and
-  replies. The ring-3 test program checks the system calls, that bad
+- Starts **Michael**, the supervisor, as the first user task. He opens a
+  Drawbridge session with the task he watches — authenticating it over an
+  endpoint and trading a sealed message — and checks on it through a Task
+  Writ. The ring-3 test program checks the system calls, that bad
   arguments and ungranted Writs are refused, that the timer preempts a
-  ring-3 loop, that it can trade a message with Michael, and that the
-  cryptography is correct.
+  ring-3 loop, that the cryptography is correct, and that it can open a
+  Drawbridge session with Michael over the Keep's message passing.
 
 ## Cryptography (`crypto/`)
 
@@ -130,8 +131,15 @@ pinned-identity mismatch and a low-order point are all caught. The caller
 supplies the random secret keys; this crate has no entropy source, and
 like the crypto beneath it, it is **not audited**.
 
-The quantum-resistant pieces (ML-KEM, SLH-DSA) come next, and then
-Drawbridge carried over real endpoints between separate tasks.
+And it already runs **between two separate tasks over real endpoints**: at
+every boot, `check` (the initiator) and `michael` (the responder) run the
+handshake through the Keep's message passing — each pinning the other's
+identity — and trade a sealed message, with a small fragmentation layer
+(`send_blob`/`recv_blob`) splitting each handshake message across the
+register-sized IPC packets. The two use fixed demo identity keys, clearly
+marked as such; real ones come from per-device entropy and Castling.
+
+The quantum-resistant pieces (ML-KEM, SLH-DSA) come next.
 
 ## Build, run, test
 
@@ -215,16 +223,13 @@ The Keep's privileged core is in place; the crypto foundation and the
 Drawbridge handshake are down. What's left builds on top:
 
 1. **Quantum-resistant crypto**: ML-KEM and SLH-DSA, to sit beside X25519
-   and Ed25519 as the other half of Rook's hybrid.
-2. **Drawbridge over endpoints**: carry the handshake and sealed channel
-   between two separate ring-3 tasks through the Keep's message passing,
-   not just within one task — which needs a small layer to fragment a
-   message across the register-sized IPC packets.
-3. **General OS services**: a block-device driver and a simple filesystem,
+   and Ed25519 as the other half of Rook's hybrid, and a real entropy
+   source in the Keep so sessions use fresh randomness, not demo keys.
+2. **General OS services**: a block-device driver and a simple filesystem,
    as user-space services reached through Writs, so programs and data can
    live on disk instead of being baked into the image.
-4. The angels as real tasks (Michael spawning, watching and restarting
+3. The angels as real tasks (Michael spawning, watching and restarting
    the others, then Gabriel and Raphael), which also needs runtime task
    spawn and reclaiming an exited task's slot.
-5. Fuzz the parsers, and boot under GRUB on real hardware (x2APIC and a
+4. Fuzz the parsers, and boot under GRUB on real hardware (x2APIC and a
    PIT-less timer source are still to do).

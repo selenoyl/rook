@@ -14,8 +14,10 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
+use drawbridge::{Identity, Initiator, InitiatorDone, MSG2_LEN};
 use user::Error;
 use user::abi::{MAX_LOG, check};
+use user::demo_identity::{MICHAEL_SECRET, ephemeral};
 
 const TO_SUPERVISOR: u64 = 0;
 const FROM_SUPERVISOR: u64 = 1;
@@ -127,14 +129,84 @@ fn run_checks() -> Result<(), &'static str> {
         "using a handle with no Writ is refused",
     )?;
 
-    // Message passing: report to the supervisor and wait for the reply.
+    // Message passing, for real: run a Drawbridge handshake with the
+    // supervisor over the two endpoints, then trade a sealed message.
+    drawbridge_over_ipc()?;
+    let _ = user::log("drawbridge over IPC: sealed channel with the supervisor");
+    Ok(())
+}
+
+/// The check task is the Drawbridge initiator. It sends the handshake over
+/// `TO_SUPERVISOR` and hears the answer over `FROM_SUPERVISOR`, pins the
+/// supervisor's identity, then seals a report and opens the sealed reply —
+/// all over the Keep's real message passing, fragmented by `send_blob`.
+fn drawbridge_over_ipc() -> Result<(), &'static str> {
+    let me = Identity::from_secret(&user::demo_identity::CHECK_SECRET);
+    let supervisor = crypto::public_key(&MICHAEL_SECRET);
+
+    let (initiator, msg1) = Initiator::start(&me, &ephemeral(b'C'), Some(supervisor));
     expect(
-        user::send(TO_SUPERVISOR, [0x00C0FFEE, 0, 0, 0]).is_ok(),
-        "reporting to the supervisor",
+        user::send_blob(TO_SUPERVISOR, &msg1).is_ok(),
+        "sending the handshake's first message",
     )?;
+    let mut msg2 = [0u8; MSG2_LEN];
     expect(
-        user::recv(FROM_SUPERVISOR).is_ok(),
-        "hearing back from the supervisor",
+        user::recv_blob(FROM_SUPERVISOR, &mut msg2).is_ok(),
+        "receiving the handshake's second message",
+    )?;
+    let InitiatorDone {
+        msg3,
+        mut session,
+        peer_identity,
+    } = initiator
+        .finish(&msg2)
+        .map_err(|_| "completing the handshake")?;
+    expect(peer_identity == supervisor, "the supervisor's identity")?;
+    expect(
+        user::send_blob(TO_SUPERVISOR, &msg3).is_ok(),
+        "sending the handshake's third message",
+    )?;
+
+    // A sealed report to the supervisor (32 bytes of plaintext).
+    let mut report: [u8; 32] = *b"reporting for duty, supervisor!!";
+    let tag = session
+        .seal(&mut report)
+        .map_err(|_| "sealing the report")?;
+    expect(
+        user::send_blob(TO_SUPERVISOR, &framed(&report, &tag)).is_ok(),
+        "sending the sealed report",
+    )?;
+
+    // The supervisor's sealed reply must open and read as expected.
+    let mut incoming = [0u8; 48];
+    expect(
+        user::recv_blob(FROM_SUPERVISOR, &mut incoming).is_ok(),
+        "receiving the sealed reply",
+    )?;
+    let (mut reply, tag) = unframe(&incoming);
+    session
+        .open(&mut reply, &tag)
+        .map_err(|_| "opening the sealed reply")?;
+    expect(
+        &reply == b"welcome; you have the watch now.",
+        "the sealed reply",
     )?;
     Ok(())
+}
+
+/// Pack a 32-byte ciphertext and its 16-byte tag into one 48-byte frame.
+fn framed(ciphertext: &[u8; 32], tag: &[u8; 16]) -> [u8; 48] {
+    let mut out = [0u8; 48];
+    out[..32].copy_from_slice(ciphertext);
+    out[32..].copy_from_slice(tag);
+    out
+}
+
+/// Split a 48-byte frame back into ciphertext and tag.
+fn unframe(frame: &[u8; 48]) -> ([u8; 32], [u8; 16]) {
+    let mut ciphertext = [0u8; 32];
+    let mut tag = [0u8; 16];
+    ciphertext.copy_from_slice(&frame[..32]);
+    tag.copy_from_slice(&frame[32..]);
+    (ciphertext, tag)
 }

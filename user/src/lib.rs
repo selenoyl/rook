@@ -109,6 +109,79 @@ pub fn watch(handle: u64) -> Result<u64, Refused> {
     abi::result(sys::call(call::WATCH, [handle, 0, 0, 0]))
 }
 
+/// Bytes carried in one endpoint message (four 64-bit words).
+const BLOB_CHUNK: usize = abi::MSG_WORDS * 8;
+
+/// Send a byte buffer over an endpoint as a run of fixed-size messages.
+/// The receiver calls `recv_blob` with a buffer of the same length, so the
+/// two agree how many messages to expect — Drawbridge's message sizes are
+/// fixed constants, so they always do. The last message is zero-padded;
+/// the receiver ignores the padding. This is the small fragmentation layer
+/// that carries a handshake, larger than one message, over the Keep's
+/// register-sized IPC.
+pub fn send_blob(handle: u64, bytes: &[u8]) -> Result<(), Refused> {
+    for chunk in bytes.chunks(BLOB_CHUNK) {
+        let mut words = [0u64; abi::MSG_WORDS];
+        for (i, word) in words.iter_mut().enumerate() {
+            let start = i * 8;
+            if start < chunk.len() {
+                let end = core::cmp::min(start + 8, chunk.len());
+                let mut buf = [0u8; 8];
+                buf[..end - start].copy_from_slice(&chunk[start..end]);
+                *word = u64::from_le_bytes(buf);
+            }
+        }
+        send(handle, words)?;
+    }
+    Ok(())
+}
+
+/// Receive a byte buffer sent with `send_blob` into `out`, reassembling the
+/// messages. Returns the sender's badge (from the first message).
+pub fn recv_blob(handle: u64, out: &mut [u8]) -> Result<u64, Refused> {
+    let mut badge = 0;
+    for (n, chunk) in out.chunks_mut(BLOB_CHUNK).enumerate() {
+        let (b, words) = recv(handle)?;
+        if n == 0 {
+            badge = b;
+        }
+        for (i, word) in words.iter().enumerate() {
+            let start = i * 8;
+            if start < chunk.len() {
+                let end = core::cmp::min(start + 8, chunk.len());
+                let bytes = word.to_le_bytes();
+                chunk[start..end].copy_from_slice(&bytes[..end - start]);
+            }
+        }
+    }
+    Ok(badge)
+}
+
+/// Fixed identity keys for the Drawbridge-over-IPC demonstration between
+/// `michael` and `check`.
+///
+/// These are NOT secret and NOT random — they are two constant bytes
+/// repeated. Real identities come from per-device entropy and are
+/// exchanged in person by Castling; these exist only so the two built-in
+/// tasks can authenticate each other at boot, to show the handshake runs
+/// over real endpoints. A deployed Rook must never ship a fixed key.
+pub mod demo_identity {
+    /// Michael's demo identity secret.
+    pub const MICHAEL_SECRET: [u8; 32] = [0x4d; 32];
+    /// The check task's demo identity secret.
+    pub const CHECK_SECRET: [u8; 32] = [0x43; 32];
+
+    /// A throwaway ephemeral secret for one handshake. Mixes a role tag
+    /// with the current tick so two boots differ; this is a stand-in, not
+    /// a real entropy source, and is documented as such.
+    pub fn ephemeral(role: u8) -> [u8; 32] {
+        let mut seed = [0u8; 16];
+        seed[0] = role;
+        seed[1..9].copy_from_slice(&super::now().to_le_bytes());
+        crypto::sha256(&seed)
+    }
+}
+
 /// Make a raw call: for testing how the Keep answers calls it doesn't
 /// know.
 pub fn call_raw(number: u64, args: [u64; 4]) -> Result<u64, Refused> {
