@@ -7,8 +7,9 @@
 //! have not been audited, so nothing here protects anything real until it
 //! has been. The design doc budgets that audit.
 //!
-//! What's here: SHA-256 and SHA-512, HMAC over both, ChaCha20, Poly1305,
-//! and the ChaCha20-Poly1305 AEAD. Signatures and key exchange come next.
+//! What's here: SHA-256 and SHA-512, HMAC over both, HKDF, ChaCha20,
+//! Poly1305, the ChaCha20-Poly1305 AEAD, X25519 key exchange and Ed25519
+//! signatures. Drawbridge's session protocol is built from these.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -17,6 +18,7 @@ mod aead;
 mod chacha;
 mod ed25519;
 mod field25519;
+mod hkdf;
 mod hmac;
 mod poly1305;
 mod scalar;
@@ -26,7 +28,8 @@ mod x25519;
 pub use aead::{aead_open, aead_seal, ct_eq};
 pub use chacha::chacha20_xor;
 pub use ed25519::{public_key, sign, verify};
-pub use hmac::{hmac_sha256, hmac_sha512};
+pub use hkdf::{derive_key_sha512, expand_sha256, expand_sha512, extract_sha256, extract_sha512};
+pub use hmac::{Hmac256, Hmac512, hmac_sha256, hmac_sha512};
 pub use poly1305::{Poly1305, poly1305};
 pub use sha2::{Sha256, Sha512, sha256, sha512};
 pub use x25519::{x25519, x25519_base};
@@ -42,11 +45,39 @@ const SAMPLE: &[u8; 114] =
 pub fn self_test() -> bool {
     sha2_ok()
         && hmac_ok()
+        && hkdf_ok()
         && chacha_ok()
         && poly1305_ok()
         && aead_ok()
         && x25519_ok()
         && ed25519_ok()
+}
+
+/// HKDF-SHA-256, RFC 5869 test case 1 (the construction is the same for
+/// SHA-512, which Drawbridge uses).
+fn hkdf_ok() -> bool {
+    let ikm = [0x0bu8; 22];
+    let salt = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+    ];
+    let info = [0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9];
+    let want_prk = [
+        0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf, 0x0d, 0xdc, 0x3f, 0x0d, 0xc4, 0x7b, 0xba,
+        0x63, 0x90, 0xb6, 0xc7, 0x3b, 0xb5, 0x0f, 0x9c, 0x31, 0x22, 0xec, 0x84, 0x4a, 0xd7, 0xc2,
+        0xb3, 0xe5,
+    ];
+    let want_okm = [
+        0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a, 0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36, 0x2f,
+        0x2a, 0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c, 0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4,
+        0xc5, 0xbf, 0x34, 0x00, 0x72, 0x08, 0xd5, 0xb8, 0x87, 0x18, 0x58, 0x65,
+    ];
+    let prk = extract_sha256(&salt, &ikm);
+    if prk != want_prk {
+        return false;
+    }
+    let mut okm = [0u8; 42];
+    expand_sha256(&prk, &info, &mut okm);
+    okm == want_okm
 }
 
 /// Ed25519, RFC 8032 §7.1 test 2: sign must reproduce the vector, verify

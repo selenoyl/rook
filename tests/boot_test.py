@@ -36,6 +36,7 @@ CASES = [
             "[michael] supervisor, standing watch",
             "[check] running in ring 3",
             "[check] crypto: SHA-2, HMAC, ChaCha20-Poly1305, X25519, Ed25519 verified",
+            "[check] drawbridge: authenticated session established and verified",
             "[michael] heard from task 2: 0xc0ffee",
             "[michael] task 2 is alive and well",
             "[check] all checks passed",

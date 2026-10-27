@@ -4,23 +4,31 @@ version = 4
 
 [[package]]
 name = "abi"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "crypto"
-version = "0.6.0"
+version = "0.7.0"
+
+[[package]]
+name = "drawbridge"
+version = "0.7.0"
+dependencies = [
+ "crypto",
+]
 
 [[package]]
 name = "keep"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "abi",
 ]
 
 [[package]]
 name = "user"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "abi",
  "crypto",
+ "drawbridge",
 ]

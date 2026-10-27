@@ -87,7 +87,8 @@ The first layer of Rook's security architecture: a `no_std`,
 forbid-unsafe library written from the specifications, since Rook vendors
 no crates.
 
-- **SHA-256 and SHA-512** (FIPS 180-4), and **HMAC** over both (RFC 2104).
+- **SHA-256 and SHA-512** (FIPS 180-4), **HMAC** over both (RFC 2104), and
+  **HKDF** (RFC 5869).
 - **ChaCha20**, **Poly1305**, and the **ChaCha20-Poly1305 AEAD**
   (RFC 8439).
 - **X25519** Diffie-Hellman (RFC 7748) and **Ed25519** signatures
@@ -104,10 +105,33 @@ real correctness gate. It has not been through a security audit, so — as
 the design doc itself budgets — nothing here protects anything real until
 it has.
 
-The quantum-resistant pieces come next, then Drawbridge builds on all of
-this.
-- Draws the boot banner on the VGA text screen, and in self-test mode
-  reports the result to QEMU and exits.
+## Drawbridge (`drawbridge/`)
+
+The protocol two Rook tasks (eventually two angels) use to talk securely.
+Each holds a long-term Ed25519 identity; a three-message handshake gives
+them a shared, encrypted session:
+
+- A fresh **ephemeral X25519** key each way, so the session key is
+  **forward-secret**: recording the traffic and later stealing an identity
+  key still doesn't reveal it.
+- Each side **signs the transcript** (both ephemeral keys) with its
+  identity key — **mutual authentication**, bound to this exact exchange.
+  The identities and signatures travel encrypted, so an eavesdropper
+  learns neither, and a valid tag also confirms the peer agreed the same
+  key.
+- The data channel numbers every message with a per-direction counter, so
+  a **replayed or reordered** message is refused.
+
+This is a SIGMA-style design, the same shape as the handshakes in TLS 1.3
+and Noise, built only from `crypto` above. `drawbridge::self_test()` runs a
+full handshake and sealed exchange **in ring 3 at every boot**, and the
+host tests additionally prove tampering, replay, a swapped ephemeral, a
+pinned-identity mismatch and a low-order point are all caught. The caller
+supplies the random secret keys; this crate has no entropy source, and
+like the crypto beneath it, it is **not audited**.
+
+The quantum-resistant pieces (ML-KEM, SLH-DSA) come next, and then
+Drawbridge carried over real endpoints between separate tasks.
 
 ## Build, run, test
 
@@ -162,7 +186,8 @@ addresses; the loader parses no ELF at all.
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
 | `user/` | Rook's first user programs: Michael the supervisor, and `check`, the ring-3 test program. `user/src/sys.rs` is the other place `unsafe` is allowed |
-| `crypto/` | Rook's cryptography, from the specs: SHA-2, HMAC, ChaCha20-Poly1305, X25519, Ed25519, verified against the official vectors. No `unsafe`, no external crates |
+| `crypto/` | Rook's cryptography, from the specs: SHA-2, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, verified against the official vectors. No `unsafe`, no external crates |
+| `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |
 | `UNSAFE.md` | Every unsafe use, and why it is sound |
 | `tools/check.py` | Review checks: unsafe only in the low-level modules and listed in UNSAFE.md; the Keep under 10,000 lines |
@@ -186,15 +211,15 @@ addresses; the loader parses no ELF at all.
 
 ## Next steps
 
-The Keep's privileged core is in place and the crypto foundation is
-down. What's left builds on top:
+The Keep's privileged core is in place; the crypto foundation and the
+Drawbridge handshake are down. What's left builds on top:
 
-1. **Public-key crypto**: X25519 key exchange and Ed25519 signatures
-   (the classical half of Rook's hybrid), then the quantum-resistant
-   pieces (ML-KEM, SLH-DSA).
-2. **Drawbridge**: an authenticated, encrypted session carried over the
-   Keep's message passing, so two angels can talk securely — Rook's own
-   protocol, built on the crypto above.
+1. **Quantum-resistant crypto**: ML-KEM and SLH-DSA, to sit beside X25519
+   and Ed25519 as the other half of Rook's hybrid.
+2. **Drawbridge over endpoints**: carry the handshake and sealed channel
+   between two separate ring-3 tasks through the Keep's message passing,
+   not just within one task — which needs a small layer to fragment a
+   message across the register-sized IPC packets.
 3. **General OS services**: a block-device driver and a simple filesystem,
    as user-space services reached through Writs, so programs and data can
    live on disk instead of being baked into the image.

@@ -1,0 +1,16 @@
+[package]
+name = "drawbridge"
+description = "Rook's authenticated, encrypted session protocol, built on the crypto crate"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[dependencies]
+crypto = { path = "../crypto" }
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 abi = { path = "../abi" }
 crypto = { path = "../crypto" }
+drawbridge = { path = "../drawbridge" }
 
 [lib]
 test = false
