@@ -18,9 +18,10 @@ What runs today:
   carries on.
 - A from-scratch, KAT-verified **cryptography** library — SHA-2, SHA-3,
   HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, and the **post-quantum**
-  **ML-KEM-768** and **SLH-DSA** — plus a ChaCha20 **CSPRNG** seeded from
-  the CPU.
-- **Drawbridge**, a hybrid **X25519 + ML-KEM-768** authenticated session,
+  **ML-KEM-1024**, **ML-DSA-87** and **SLH-DSA** — plus a ChaCha20
+  **CSPRNG** seeded from the CPU.
+- **Drawbridge**, a hybrid authenticated session — an **X25519 +
+  ML-KEM-1024** key exchange and an **Ed25519 + ML-DSA-87** identity —
   running between two ring-3 tasks over the Keep's message passing.
 - The **Vault**, a storage service: an ATA driver and a filesystem in ring
   3, reaching the disk only through an I/O Writ and serving files to other
@@ -121,10 +122,14 @@ no crates.
   (RFC 8439).
 - **X25519** Diffie-Hellman (RFC 7748) and **Ed25519** signatures
   (RFC 8032), over a shared 2^255-19 field.
-- **ML-KEM-768** (FIPS 203), the post-quantum key-encapsulation mechanism —
+- **ML-KEM-1024** (FIPS 203), the post-quantum key-encapsulation mechanism —
   the quantum-resistant half of Rook's hybrid key exchange.
+- **ML-DSA-87** (FIPS 204), the lattice post-quantum signature (Dilithium) —
+  the quantum-resistant half of a node's hybrid identity, beside Ed25519.
 - **SLH-DSA-SHAKE-128f** (FIPS 205), the stateless hash-based post-quantum
-  signature (SPHINCS+), for quantum-resistant identity.
+  signature (SPHINCS+) — for the **Great Seal**, Rook's software-update
+  signature, where its conservative hash-based security is worth the large
+  signature.
 - The symmetric pieces and the X25519 ladder are constant-time — no step
   branches on a key or a secret. Ed25519 signing is not yet (its
   double-and-add walks the scalar's bits), and the code says so.
@@ -132,11 +137,12 @@ no crates.
 Every primitive is checked against the official RFC/NIST **known-answer
 vectors** two ways: as host unit tests (`make test` runs them), and by
 `crypto::self_test()`, which the `check` program runs **in ring 3 at every
-boot**. ML-KEM-768 and SLH-DSA are pinned to the NIST ACVP vectors — the
-full keys, signatures and ciphertext on the host (ML-KEM encaps/decaps and
-SLH-DSA keygen/sign/verify), and compact checks in ring 3 (ML-KEM keygen
-hashes plus a round-trip, and an SLH-DSA signature verify). A single wrong
-constant or rotation fails a vector,
+boot**. ML-KEM-1024, ML-DSA-87 and SLH-DSA are pinned to the NIST ACVP
+vectors — the full keys, signatures and ciphertext on the host (ML-KEM
+encaps/decaps, and ML-DSA and SLH-DSA keygen/sign/verify), and compact
+checks in ring 3 (ML-KEM keygen hashes plus a round-trip, and an ML-DSA and
+an SLH-DSA signature verify). A single wrong constant or rotation fails a
+vector,
 so this is a real correctness gate. It has not been through a security
 audit, so — as the design doc itself budgets — nothing here protects
 anything real until it has.
@@ -144,22 +150,24 @@ anything real until it has.
 ## Drawbridge (`drawbridge/`)
 
 The protocol two Rook tasks (eventually two angels) use to talk securely.
-Each holds a long-term Ed25519 identity; a three-message handshake gives
-them a shared, encrypted session:
+Each holds a long-term **hybrid identity** — an Ed25519 key and an
+ML-DSA-87 key; a three-message handshake gives them a shared, encrypted
+session:
 
 - A **hybrid, post-quantum key exchange**: each side contributes a fresh
   **ephemeral X25519** key, and the initiator also offers an ephemeral
-  **ML-KEM-768** encapsulation key that the responder encapsulates to. The
+  **ML-KEM-1024** encapsulation key that the responder encapsulates to. The
   session key is derived from *both* shared secrets, so recovering it means
   breaking a classical **and** a post-quantum problem. The ephemeral keys
   are per-session, so the session stays **forward-secret** even if an
   identity key is later stolen.
 - Each side **signs the transcript** — every public value of the handshake
-  — with its identity key, for **mutual authentication** bound to this
-  exact exchange. The identities and signatures travel encrypted, so an
-  eavesdropper learns neither, and a valid tag also confirms the peer
-  agreed the same key. (Identity authentication is still classical Ed25519;
-  post-quantum signatures, SLH-DSA, come next.)
+  — with **both** halves of its identity, Ed25519 and ML-DSA-87, for
+  **mutual authentication** bound to this exact exchange. A verifier
+  requires both signatures, so the identity holds even if elliptic curves
+  fall. The identities and signatures travel encrypted, so an eavesdropper
+  learns neither, and a valid tag also confirms the peer agreed the same
+  key.
 - The data channel numbers every message with a per-direction counter, so
   a **replayed or reordered** message is refused.
 
@@ -181,9 +189,11 @@ identity — and trade a sealed message, with a small fragmentation layer
 register-sized IPC packets. The two use fixed demo identity keys, clearly
 marked as such; real ones come from per-device entropy and Castling.
 
-The key exchange is already hybrid. **SLH-DSA** is implemented too (see
-`crypto`); wiring it in beside Ed25519 to make the identity authentication
-hybrid as well is the next step.
+Both the key exchange and the identity are now hybrid — classical *and*
+post-quantum, so an attacker must break both. What remains is the **Great
+Seal**: Rook's software updates are signed by a k-of-n **Round Table**,
+each seat an Ed25519 and an **SLH-DSA** key (SLH-DSA is implemented in
+`crypto`); that threshold signing is the next crypto step.
 
 ## Storage: the Vault (`vault/`)
 
@@ -265,7 +275,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
 | `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
-| `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-768, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
+| `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
@@ -296,10 +306,11 @@ The Keep's privileged core is in place; the crypto foundation, the
 Drawbridge handshake and a ring-3 storage service are down. What's left
 builds on top:
 
-1. **Hybrid identity authentication**: Drawbridge's key exchange is already
-   X25519 + ML-KEM-768, and SLH-DSA is implemented; the next step is signing
-   the handshake transcript with SLH-DSA beside Ed25519, so identity auth is
-   post-quantum too — then on to the Great Seal's k-of-n signing.
+1. **The Great Seal**: Rook's software updates signed by a k-of-n **Round
+   Table**, each seat an Ed25519 and an SLH-DSA key, with a threshold below
+   the seat count. The hybrid identity (Ed25519 + ML-DSA-87) and the hybrid
+   key exchange (X25519 + ML-KEM-1024) are done; this is the next crypto
+   milestone.
 2. **A fuller Vault**: writes and deletion from a client over the sealed
    channel, and freed-space reclamation, so the disk is read-write, not
    just read-mostly.
