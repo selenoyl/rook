@@ -27,9 +27,11 @@ What runs today:
   3, reaching the disk only through an I/O Writ and serving files to other
   tasks over an endpoint.
 - **Gabriel**, the messenger: a ring-3 **NE2000 network driver** behind an
-  I/O Writ, with **Ethernet/ARP/IPv4/UDP** framing and the **Courier**
-  transport. At boot he drives a real (emulated) card and exchanges packets
-  on the wire — an ARP request to the gateway and its reply.
+  I/O Writ, with **Ethernet/ARP/IPv4/UDP** framing. At boot he drives a real
+  (emulated) card and round-trips datagrams on the wire (ARP, then DHCP);
+  and two Keeps on one wire run a full **Drawbridge handshake over UDP** and
+  exchange a message through **Courier** — Rook's post-quantum channel over
+  an ordinary network, machine to machine.
 
 Everything here is `#![forbid(unsafe_code)]` except two named low-level
 modules, builds with no external crates, and is covered by host unit tests
@@ -340,13 +342,25 @@ machines over the network. He puts the pieces above onto an actual link:
   (QEMU's `ne2k_isa` at 0x300) and nothing else. It resets the card, reads
   its MAC from the card's PROM over remote DMA, transmits frames, and reads
   received frames from the card's ring, following the ring's wrap.
-- The `gabriel` task brings the card up and proves it carries real traffic:
-  it builds an **ARP** request with the `net` crate, broadcasts it, and
-  waits for the gateway's reply — so at every boot Rook sends *and* receives
-  a packet on the wire, driven entirely from an unprivileged task.
+- The `gabriel` task has three roles. By default, over QEMU's user network,
+  it climbs the stack a layer at a time and proves each on the wire: an
+  **ARP** for the gateway (Ethernet), then a **DHCP** DISCOVER/OFFER
+  round-trip (IPv4 + UDP) — so at every boot Rook sends *and* receives real
+  datagrams, driven entirely from an unprivileged task.
+- As `server` and `client`, two Keeps are wired to one Ethernet (QEMU's
+  socket netdev — a real wire with another machine on the far end) and talk
+  to each other: they run a full **Drawbridge handshake over UDP** and then
+  exchange an application message through **Courier**. The client pins the
+  server's identity and the server checks the client's; the key is the
+  hybrid X25519 + ML-KEM-1024 exchange and each side proves itself with the
+  hybrid Ed25519 + ML-DSA-87 signature. This is the whole point of the
+  design made real: Rook's authenticated, post-quantum channel running
+  between two machines over an ordinary network, not only over LoRa.
 
-Carrying UDP (and Courier over it) to a peer is the next step; the framing
-(`net`) and the transport (`courier`) are already in place.
+The handshake messages are larger than one Ethernet frame, so Gabriel
+carries them as *parcels* — kind ‖ total ‖ offset ‖ fragment — reassembled
+on the far side; Courier packets fit one datagram each. The two-node
+exchange runs under `tests/net_test.py`, part of `make test`.
 
 ## Build, run, test
 
