@@ -137,3 +137,17 @@ pub mod check {
     /// keeps running.
     pub const CRASH: u64 = 1;
 }
+
+/// Roles for `gabriel`, the network messenger, chosen with the task's
+/// start argument.
+pub mod gabriel {
+    /// Bring the card up and prove the link locally: ARP the gateway and
+    /// a DHCP round-trip over QEMU's user network.
+    pub const DHCP: u64 = 0;
+    /// Listen on a point-to-point link for another Rook and answer it: the
+    /// Drawbridge responder, then echo over Courier.
+    pub const SERVER: u64 = 1;
+    /// Dial another Rook over a point-to-point link: the Drawbridge
+    /// initiator, then a Courier exchange.
+    pub const CLIENT: u64 = 2;
+}

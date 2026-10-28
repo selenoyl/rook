@@ -48,6 +48,7 @@ check:
 
 test: build check $(DISK)
 	python3 tests/boot_test.py $(IMAGE)
+	python3 tests/net_test.py $(IMAGE)
 
 screen: build $(DISK)
 	python3 tools/screenshot.py $(IMAGE) build/screen.png

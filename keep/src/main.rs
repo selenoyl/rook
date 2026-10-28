@@ -161,6 +161,27 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         attack(name);
     }
 
+    // Networking mode (net=server|client): two Keeps are wired to one
+    // Ethernet and Gabriel talks to the other Rook over the wire. Only he
+    // runs; the self-test services stay down. The Keep exits with his
+    // result once he finishes.
+    if let Some(role) = boot.value("net") {
+        let arg = match role {
+            "server" => abi::gabriel::SERVER,
+            "client" => abi::gabriel::CLIENT,
+            _ => abi::gabriel::DHCP,
+        };
+        let gabriel = spawn_gabriel(&booted.gabriel, arg);
+        arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
+        kprintln!("[keep] sched: timer on, {TICKS_PER_SECOND} ticks a second");
+        let ok = wait_for_gabriel(gabriel);
+        arch::qemu::exit(if ok {
+            arch::qemu::EXIT_SUCCESS
+        } else {
+            arch::qemu::EXIT_FAILURE
+        });
+    }
+
     // Everything else runs under the scheduler. Michael comes first, with
     // Writs to hear from and reply to the task he watches.
     let michael = spawn_user(
@@ -199,7 +220,7 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         _ => {
             let check = spawn_check(&booted.check, abi::check::CALLS, michael);
             spawn_vault(&booted.vault);
-            let gabriel = spawn_gabriel(&booted.gabriel);
+            let gabriel = spawn_gabriel(&booted.gabriel, abi::gabriel::DHCP);
             Some((check, Watch::Checks, Some(gabriel)))
         }
     };
@@ -530,13 +551,14 @@ fn spawn_vault(program: &user::Program) -> usize {
     )
 }
 
-/// Start the `gabriel` messenger: an I/O Writ for the network card's ports
-/// (handle 0) and nothing else, so the NIC driver runs in ring 3.
-fn spawn_gabriel(program: &user::Program) -> usize {
+/// Start the `gabriel` messenger in the given role: an I/O Writ for the
+/// network card's ports (handle 0) and nothing else, so the NIC driver runs
+/// in ring 3.
+fn spawn_gabriel(program: &user::Program, role: u64) -> usize {
     spawn_user(
         "gabriel",
         program,
-        0,
+        role,
         &[Writ::Io {
             base: NIC_IO_BASE,
             count: NIC_IO_COUNT,
@@ -549,7 +571,7 @@ fn spawn_gabriel(program: &user::Program) -> usize {
 /// a couple of seconds, so this waits generously but not forever; never
 /// finishing counts as a failure rather than hanging the machine.
 fn wait_for_gabriel(gabriel: usize) -> bool {
-    const WAIT_TICKS: u64 = 10 * TICKS_PER_SECOND;
+    const WAIT_TICKS: u64 = 25 * TICKS_PER_SECOND;
     for _ in 0..WAIT_TICKS {
         if let Some(outcome) = sched::outcome(gabriel) {
             let ok = outcome == Outcome::Exited(0);
