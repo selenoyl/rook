@@ -192,17 +192,24 @@ marked as such; real ones come from per-device entropy and Castling.
 Both the key exchange and the identity are hybrid — classical *and*
 post-quantum, so an attacker must break both.
 
+Drawbridge is transport-agnostic — it is just byte messages. Today they
+ride the Keep's in-process IPC; across machines they ride **Courier over
+UDP on an ordinary Wi-Fi or Ethernet network**, the first edition's path.
+Keeping the messages small also lets them survive a low-power mesh link
+(the Pawn edition's LoRa radio), but nothing here is tied to LoRa.
+
 The full handshake above is **first contact**. It is heavy — the two
 ~4.6 KB ML-DSA signatures dominate — so machines run it only once per
 peer, then save a key and **resume**. A resumption is two tiny messages
-(32 and 48 bytes, one LoRa packet): a fresh X25519 exchange keyed by the
-saved key, with no signatures and no ML-KEM, authenticated because only
-the real peer holds that key. Each resumption ratchets the saved key
-forward. Two machines can also establish the first saved key **in person**
-by **Castling** — a hybrid exchange over IR or a link cable, authenticated
-by presence and a six-digit code the two people compare, so no relay can
-sit between them. Both paths are in `drawbridge` and covered by host tests;
-wiring resumption and Castling into the running ring-3 demo comes next.
+(32 and 48 bytes — small enough even for a single LoRa packet): a fresh
+X25519 exchange keyed by the saved key, with no signatures and no ML-KEM,
+authenticated because only the real peer holds that key. Each resumption
+ratchets the saved key forward. Two machines can also establish the first
+saved key **in person** by **Castling** — a hybrid exchange over IR or a
+link cable, authenticated by presence and a six-digit code the two people
+compare, so no relay can sit between them. Both paths are in `drawbridge`
+and covered by host tests; wiring resumption and Castling into the running
+ring-3 demo comes next.
 
 ## Storage: the Vault (`vault/`)
 

@@ -13,9 +13,11 @@
 //! first contact (see [`crate::SavedKey`]). Only the genuine peer holds it,
 //! so a correct `confirm` tag proves the responder is who the initiator
 //! paired with, and the responder is in turn assured once it opens the
-//! initiator's first sealed message. Each message is tiny — 32 and 48
-//! bytes — so a resumption fits in a single LoRa packet, as the design doc
-//! requires.
+//! initiator's first sealed message. A resumption carries over whatever
+//! transport Drawbridge runs on — the Keep's IPC here, UDP over an ordinary
+//! network through Courier later. Each message is tiny — 32 and 48 bytes —
+//! so it also survives the smallest, lossiest link, down to a single LoRa
+//! packet, the worst case the design doc sizes for.
 //!
 //! Every resumption ratchets: both sides derive a fresh session *and* a new
 //! saved key from the old saved key and a fresh X25519 exchange. A caller
