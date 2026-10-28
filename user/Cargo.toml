@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 abi = { path = "../abi" }
+courier = { path = "../courier" }
 crypto = { path = "../crypto" }
 drawbridge = { path = "../drawbridge" }
 net = { path = "../net" }

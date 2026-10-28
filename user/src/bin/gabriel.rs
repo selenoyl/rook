@@ -6,10 +6,17 @@
 //!     then a DHCP round-trip (IPv4 + UDP), proving the card drives a real
 //!     link on its own;
 //!   * `server` and `client`, for the two-node test, where two Keeps are
-//!     wired to one Ethernet and talk to each other over the wire.
+//!     wired to one Ethernet and run a full Drawbridge handshake over UDP,
+//!     then exchange an application message through Courier — Rook's
+//!     authenticated, post-quantum channel carried over a regular network.
 //!
-//! Everything is built and parsed with the `net` crate under the Gatehouse
-//! rules, and driven through the capability-gated NE2000 driver in ring 3.
+//! The Drawbridge handshake messages are larger than one Ethernet frame, so
+//! they travel as *parcels*: each UDP datagram carries a one-byte kind, the
+//! message's total length, and this fragment's offset, and the far side
+//! reassembles them. Courier packets already fit one datagram, so each is a
+//! single-fragment parcel. Everything is built and parsed with the `net`
+//! crate under the Gatehouse rules and driven through the capability-gated
+//! NE2000 driver in ring 3.
 //!
 //! The Keep seeds his capability table at boot:
 //!   handle 0  an I/O Writ for the network card's ports
@@ -18,6 +25,8 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
+use courier::Courier;
+use drawbridge::{Identity, Initiator, Responder};
 use net::{
     ARP_LEN, ARP_REPLY, ARP_REQUEST, Arp, BROADCAST, ETHERTYPE_ARP, ETHERTYPE_IPV4, Ip, Mac,
     PROTO_UDP,
@@ -45,19 +54,47 @@ const XID: [u8; 4] = *b"Rook";
 const SERVER_IP: Ip = [10, 9, 0, 1];
 const CLIENT_IP: Ip = [10, 9, 0, 2];
 const PORT: u16 = 7000;
-const PING: &[u8] = b"rook-ping";
-const PONG: &[u8] = b"rook-pong";
+
+/// Fixed test identities for the two ends. A real caller would generate
+/// these from entropy and know only the *public* half of its peer; here
+/// both secrets are compiled in so the handshake is reproducible. Like the
+/// rest of the crypto, these protect nothing real.
+const CLIENT_SECRET: [u8; 32] = [0x11; 32];
+const SERVER_SECRET: [u8; 32] = [0x22; 32];
+/// The application message the client sends through Courier; the server
+/// echoes it back.
+const HAIL: &[u8] = b"Gabriel: a message from one Rook to another";
+
+/// Parcel kinds: the three handshake messages, and a Courier packet.
+const P_MSG1: u8 = 1;
+const P_MSG2: u8 = 2;
+const P_MSG3: u8 = 3;
+const P_DATA: u8 = 4;
+/// Message bytes carried per parcel, well under the Ethernet MTU.
+const FRAG: usize = 1024;
+/// Parcel header: kind, total length (u16), this fragment's offset (u16).
+const PHDR: usize = 5;
+/// The largest message reassembled from parcels (the handshake's msg2).
+const MAX_PARCEL_MSG: usize = drawbridge::MSG2_LEN;
 
 /// Poll attempts for a reply, each after a 10 ms sleep, so the card and the
 /// network have time to answer without the task spinning or hanging.
 const TRIES: u32 = 100;
-/// The server polls this many ticks for a client before giving up, long
-/// enough for the other Keep to boot and reach it.
-const SERVER_TRIES: u32 = 1500;
-/// The client resends its ARP / ping this many times, polling `WAIT` ticks
-/// between each, so an answer from a still-booting peer is not missed.
-const ROUNDS: u32 = 60;
+/// The server polls this many rounds for the client before giving up, long
+/// enough for the other Keep to boot and complete the exchange.
+const SERVER_TRIES: u32 = 2000;
+/// The client resends its ARP / handshake message this many rounds, polling
+/// `WAIT` ticks between each, so an answer from a still-booting or busy peer
+/// is not missed.
+const ROUNDS: u32 = 30;
 const WAIT: u32 = 10;
+/// Ticks to await a handshake reply, longer because the peer computes
+/// post-quantum crypto before answering.
+const WAIT_HS: u32 = 100;
+/// Rounds the client drives Courier waiting for the echo.
+const COURIER_ROUNDS: u32 = 400;
+/// Extra rounds a side pumps after it is done, to flush acknowledgements.
+const GRACE: u32 = 200;
 
 user::program!(main);
 
@@ -210,41 +247,124 @@ fn offer_from_frame(frame: &[u8]) -> Option<Ip> {
 
 // --- The two-node roles: two Keeps on one wire --------------------------
 
-/// Listen on the point-to-point link for the client, answer its ARP, and
-/// reply to its ping, proving two Rook machines reach each other over UDP.
+/// The server: answer the client's ARP, run the Drawbridge handshake as the
+/// responder, then receive the client's Courier message and echo it. All of
+/// it driven off one receive loop, since the client drives the exchange.
 fn server(nic: &mut Ne2000, mac: &Mac) -> ! {
+    let id = Identity::from_secret(&SERVER_SECRET);
+    let client_pub = Identity::from_secret(&CLIENT_SECRET).public();
+    let mut seed = [0u8; 32];
+    if user::random(&mut seed).is_err() {
+        let _ = user::log("gabriel: no entropy for the handshake");
+        user::exit(1);
+    }
     let _ = user::log("gabriel: server up, listening for a Rook on the wire");
+
+    let mut re = Reassembler::new();
     let mut buf = [0u8; 1536];
+    let mut responder: Option<Responder> = None;
+    let mut msg2 = [0u8; drawbridge::MSG2_LEN];
+    let mut courier: Option<Courier> = None;
+    let mut peer: Option<(Mac, Ip)> = None;
+    let mut served = false;
+    let mut grace = 0u32;
+
     for _ in 0..SERVER_TRIES {
         while let Some(len) = nic.poll(&mut buf) {
-            answer_arp(nic, mac, &buf[..len]);
-            if let Some((peer_mac, peer_ip, peer_port, payload)) = udp_from(&buf[..len], SERVER_IP)
-                && peer_port == PORT
-                && payload == PING
-            {
-                let _ = send_udp(
-                    nic, mac, &peer_mac, SERVER_IP, peer_ip, PORT, peer_port, PONG,
-                );
-                user::logln!(
-                    "gabriel: server answered a ping from {}.{}.{}.{} over UDP",
-                    peer_ip[0],
-                    peer_ip[1],
-                    peer_ip[2],
-                    peer_ip[3]
-                );
-                let _ = user::log("gabriel: two Rook machines talk over a regular network");
+            let frame = &buf[..len];
+            answer_arp(nic, mac, frame);
+            let Some((pmac, pip, sport, payload)) = udp_from(frame, SERVER_IP) else {
+                continue;
+            };
+            if sport != PORT {
+                continue;
+            }
+            peer = Some((pmac, pip));
+            let Some((kind, m)) = re.feed(payload) else {
+                continue;
+            };
+            match kind {
+                P_MSG1 => {
+                    if responder.is_none()
+                        && courier.is_none()
+                        && let Ok(m1) = <&[u8; drawbridge::MSG1_LEN]>::try_from(m)
+                        && let Ok((r, m2)) = Responder::respond(&id, &seed, m1)
+                    {
+                        responder = Some(r);
+                        msg2 = m2;
+                    }
+                    if responder.is_some() {
+                        let _ = send_parcel(nic, mac, &pmac, SERVER_IP, pip, P_MSG2, &msg2);
+                    }
+                }
+                P_MSG3 => {
+                    if courier.is_none()
+                        && let Ok(m3) = <&[u8; drawbridge::MSG3_LEN]>::try_from(m)
+                        && let Some(r) = responder.take()
+                    {
+                        match r.finish(m3) {
+                            Ok(done) if done.peer_identity == client_pub => {
+                                let _ = user::log(
+                                    "gabriel: server completed the Drawbridge handshake, authenticated the client",
+                                );
+                                let (c2s, s2c) = courier_keys(&done.saved_key);
+                                courier = Some(Courier::new(s2c, c2s));
+                            }
+                            _ => {
+                                let _ = user::log("gabriel: server rejected the client's identity");
+                                user::exit(1);
+                            }
+                        }
+                    }
+                }
+                P_DATA => {
+                    if let Some(c) = courier.as_mut() {
+                        let _ = c.on_packet(m);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Deliver the client's message, echo it, and keep the wire moving.
+        if let (Some(c), Some((pmac, pip))) = (courier.as_mut(), peer) {
+            let mut out = [0u8; courier::MAX_MSG];
+            while let Some((_s, n)) = c.poll_deliver(&mut out) {
+                if !served {
+                    user::logln!(
+                        "gabriel: server read a {}-byte Courier message from the client",
+                        n
+                    );
+                    let _ = c.send(0, &out[..n]);
+                    served = true;
+                    let _ = user::log(
+                        "gabriel: Courier carries application data between two Rook machines",
+                    );
+                }
+            }
+            drain_tx(nic, mac, &pmac, SERVER_IP, pip, c);
+        }
+
+        if served {
+            let idle = courier.as_ref().is_some_and(Courier::idle);
+            if idle || grace > GRACE {
                 user::exit(0);
             }
+            grace += 1;
         }
         let _ = user::sleep(1);
     }
-    let _ = user::log("gabriel: server heard no client");
+    let _ = user::log("gabriel: server never finished with the client");
     user::exit(1)
 }
 
-/// Find the server with ARP, then ping it over UDP and wait for the pong,
-/// resending if an answer is missed while the peer is still coming up.
+/// The client: find the server with ARP, run the Drawbridge handshake as the
+/// initiator (pinning the server's identity), then send an application
+/// message through Courier and wait for the echo.
 fn client(nic: &mut Ne2000, mac: &Mac) -> ! {
+    let id = Identity::from_secret(&CLIENT_SECRET);
+    let server_pub = Identity::from_secret(&SERVER_SECRET).public();
+
     let Some(server_mac) = arp_resolve(nic, mac, CLIENT_IP, SERVER_IP) else {
         let _ = user::log("gabriel: no ARP reply from the server");
         user::exit(1);
@@ -259,34 +379,247 @@ fn client(nic: &mut Ne2000, mac: &Mac) -> ! {
         server_mac[5]
     );
 
+    let mut seed = [0u8; 32];
+    if user::random(&mut seed).is_err() {
+        let _ = user::log("gabriel: no entropy for the handshake");
+        user::exit(1);
+    }
+    let (initiator, msg1) = Initiator::start(&id, &seed, Some(server_pub));
+
+    // Send msg1 and reassemble the server's msg2, resending while it works.
+    let mut re = Reassembler::new();
     let mut buf = [0u8; 1536];
+    let mut msg2 = [0u8; drawbridge::MSG2_LEN];
+    if !exchange(
+        nic,
+        mac,
+        &server_mac,
+        CLIENT_IP,
+        SERVER_IP,
+        P_MSG1,
+        &msg1,
+        P_MSG2,
+        &mut re,
+        &mut buf,
+        &mut msg2,
+    ) {
+        let _ = user::log("gabriel: no handshake reply from the server");
+        user::exit(1);
+    }
+    let done = match initiator.finish(&msg2) {
+        Ok(done) => done,
+        Err(_) => {
+            let _ = user::log("gabriel: the server's handshake did not verify");
+            user::exit(1);
+        }
+    };
+    let _ = user::log(
+        "gabriel: client completed the Drawbridge handshake, authenticated the server (X25519+ML-KEM-1024, Ed25519+ML-DSA-87)",
+    );
+    let _ = send_parcel(
+        nic,
+        mac,
+        &server_mac,
+        CLIENT_IP,
+        SERVER_IP,
+        P_MSG3,
+        &done.msg3,
+    );
+
+    // The sealed channel is open; carry an application message over Courier.
+    let (c2s, s2c) = courier_keys(&done.saved_key);
+    let mut courier = Courier::new(c2s, s2c);
+    if courier.send(0, HAIL).is_err() {
+        let _ = user::log("gabriel: could not queue the Courier message");
+        user::exit(1);
+    }
+
+    let mut out = [0u8; courier::MAX_MSG];
+    let mut echoed = false;
+    for round in 0..COURIER_ROUNDS {
+        drain_tx(nic, mac, &server_mac, CLIENT_IP, SERVER_IP, &mut courier);
+        while let Some(len) = nic.poll(&mut buf) {
+            let frame = &buf[..len];
+            if let Some((_, _, sport, payload)) = udp_from(frame, CLIENT_IP)
+                && sport == PORT
+                && let Some((kind, m)) = re.feed(payload)
+                && kind == P_DATA
+            {
+                let _ = courier.on_packet(m);
+            }
+        }
+        while let Some((_s, n)) = courier.poll_deliver(&mut out) {
+            if &out[..n] == HAIL {
+                echoed = true;
+            }
+        }
+        if echoed && courier.idle() {
+            break;
+        }
+        if round % 20 == 19 {
+            courier.tick();
+        }
+        let _ = user::sleep(1);
+    }
+
+    if echoed {
+        let _ = user::log("gabriel: Courier round-trip complete between two Rook machines");
+        user::exit(0);
+    }
+    let _ = user::log("gabriel: no Courier echo from the server");
+    user::exit(1)
+}
+
+/// Resend `send_msg` as `send_kind` parcels and reassemble a reply of
+/// `want_kind` into `out`, round by round, until it arrives or the rounds
+/// run out. `out.len()` is the exact length the reply must have.
+#[allow(clippy::too_many_arguments)]
+fn exchange(
+    nic: &mut Ne2000,
+    mac: &Mac,
+    dst_mac: &Mac,
+    my_ip: Ip,
+    peer_ip: Ip,
+    send_kind: u8,
+    send_msg: &[u8],
+    want_kind: u8,
+    re: &mut Reassembler,
+    buf: &mut [u8; 1536],
+    out: &mut [u8],
+) -> bool {
     for _ in 0..ROUNDS {
-        let _ = send_udp(
-            nic,
-            mac,
-            &server_mac,
-            CLIENT_IP,
-            SERVER_IP,
-            PORT,
-            PORT,
-            PING,
-        );
-        for _ in 0..WAIT {
-            while let Some(len) = nic.poll(&mut buf) {
-                if let Some((_, _, src_port, payload)) = udp_from(&buf[..len], CLIENT_IP)
-                    && src_port == PORT
-                    && payload == PONG
+        let _ = send_parcel(nic, mac, dst_mac, my_ip, peer_ip, send_kind, send_msg);
+        for _ in 0..WAIT_HS {
+            while let Some(len) = nic.poll(buf) {
+                let frame = &buf[..len];
+                if let Some((_, _, sport, payload)) = udp_from(frame, my_ip)
+                    && sport == PORT
+                    && let Some((kind, m)) = re.feed(payload)
+                    && kind == want_kind
+                    && m.len() == out.len()
                 {
-                    let _ =
-                        user::log("gabriel: pong from the server; two Rook machines talk over UDP");
-                    user::exit(0);
+                    out.copy_from_slice(m);
+                    return true;
                 }
             }
             let _ = user::sleep(1);
         }
     }
-    let _ = user::log("gabriel: no pong from the server");
-    user::exit(1)
+    false
+}
+
+/// Send every packet Courier has queued for the wire as a `P_DATA` parcel.
+fn drain_tx(nic: &Ne2000, mac: &Mac, dst_mac: &Mac, my_ip: Ip, peer_ip: Ip, courier: &mut Courier) {
+    let mut pkt = [0u8; courier::MAX_PACKET];
+    while let Some(n) = courier.poll_transmit(&mut pkt) {
+        let _ = send_parcel(nic, mac, dst_mac, my_ip, peer_ip, P_DATA, &pkt[..n]);
+    }
+}
+
+/// Derive Courier's two directional keys from the handshake's saved key:
+/// `(client->server, server->client)`. Both ends derive both and pick which
+/// is theirs to send with by role.
+fn courier_keys(saved: &drawbridge::SavedKey) -> ([u8; 32], [u8; 32]) {
+    (courier_key(&saved.0, b"c2s"), courier_key(&saved.0, b"s2c"))
+}
+
+fn courier_key(saved: &[u8; 32], label: &[u8]) -> [u8; 32] {
+    let mut input = [0u8; 48];
+    input[..32].copy_from_slice(saved);
+    let n = label.len().min(16);
+    input[32..32 + n].copy_from_slice(&label[..n]);
+    let mut out = [0u8; 32];
+    crypto::shake256(&input[..32 + n], &mut out);
+    out
+}
+
+// --- Parcels: fragment and reassemble a message over datagrams ----------
+
+/// Split `msg` into `P`-kind parcels that fit the MTU and send each as a UDP
+/// datagram. Each parcel is `kind ‖ total ‖ offset ‖ fragment`.
+#[allow(clippy::too_many_arguments)]
+fn send_parcel(
+    nic: &Ne2000,
+    mac: &Mac,
+    dst_mac: &Mac,
+    my_ip: Ip,
+    peer_ip: Ip,
+    kind: u8,
+    msg: &[u8],
+) -> Option<()> {
+    let total = msg.len();
+    let mut off = 0;
+    while off < total {
+        let end = (off + FRAG).min(total);
+        let mut payload = [0u8; PHDR + FRAG];
+        payload[0] = kind;
+        payload[1..3].copy_from_slice(&(total as u16).to_be_bytes());
+        payload[3..5].copy_from_slice(&(off as u16).to_be_bytes());
+        payload[PHDR..PHDR + (end - off)].copy_from_slice(&msg[off..end]);
+        send_udp(
+            nic,
+            mac,
+            dst_mac,
+            my_ip,
+            peer_ip,
+            PORT,
+            PORT,
+            &payload[..PHDR + (end - off)],
+        )?;
+        off = end;
+    }
+    Some(())
+}
+
+/// Reassembles one message at a time from in-order parcels. The link under
+/// it (QEMU's socket netdev) is a reliable ordered stream, so a message's
+/// fragments arrive in order; a resent message simply restarts at offset 0.
+struct Reassembler {
+    kind: u8,
+    total: usize,
+    filled: usize,
+    buf: [u8; MAX_PARCEL_MSG],
+}
+
+impl Reassembler {
+    fn new() -> Reassembler {
+        Reassembler {
+            kind: 0,
+            total: 0,
+            filled: 0,
+            buf: [0u8; MAX_PARCEL_MSG],
+        }
+    }
+
+    /// Feed one parcel. Returns the kind and the whole message once its last
+    /// fragment lands, or None while it is still arriving or on anything
+    /// malformed.
+    fn feed(&mut self, parcel: &[u8]) -> Option<(u8, &[u8])> {
+        if parcel.len() < PHDR {
+            return None;
+        }
+        let kind = parcel[0];
+        let total = usize::from(u16::from_be_bytes([parcel[1], parcel[2]]));
+        let off = usize::from(u16::from_be_bytes([parcel[3], parcel[4]]));
+        let data = &parcel[PHDR..];
+        if total == 0 || total > MAX_PARCEL_MSG || off > total || off + data.len() > total {
+            return None;
+        }
+        if off == 0 {
+            self.kind = kind;
+            self.total = total;
+            self.filled = 0;
+        } else if kind != self.kind || off != self.filled {
+            return None; // out of order on an ordered link: drop it
+        }
+        self.buf[off..off + data.len()].copy_from_slice(data);
+        self.filled = off + data.len();
+        if self.filled == self.total {
+            Some((self.kind, &self.buf[..self.total]))
+        } else {
+            None
+        }
+    }
 }
 
 // --- Link helpers, shared by every role ---------------------------------
@@ -323,7 +656,7 @@ fn arp_reply_from(frame: &[u8], from_ip: Ip) -> Option<Mac> {
     }
 }
 
-/// If `frame` is an ARP request for our address, answer it.
+/// If `frame` is an ARP request for the server's address, answer it.
 fn answer_arp(nic: &Ne2000, mac: &Mac, frame: &[u8]) {
     let Some(eth) = net::parse_eth(frame) else {
         return;

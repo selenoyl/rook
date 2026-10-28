@@ -28,13 +28,14 @@ CLIENT_MAC = "52:54:00:00:00:02"
 
 SERVER_LINES = [
     "[gabriel] gabriel: server up, listening for a Rook on the wire",
-    "[gabriel] gabriel: server answered a ping from 10.9.0.2 over UDP",
-    "[gabriel] gabriel: two Rook machines talk over a regular network",
+    "[gabriel] gabriel: server completed the Drawbridge handshake, authenticated the client",
+    "[gabriel] gabriel: Courier carries application data between two Rook machines",
     "[keep] user: gabriel carried traffic on a real link",
 ]
 CLIENT_LINES = [
     "[gabriel] gabriel: ARP reply, server 10.9.0.1 is at",
-    "[gabriel] gabriel: pong from the server; two Rook machines talk over UDP",
+    "[gabriel] gabriel: client completed the Drawbridge handshake, authenticated the server",
+    "[gabriel] gabriel: Courier round-trip complete between two Rook machines",
     "[keep] user: gabriel carried traffic on a real link",
 ]
 
@@ -108,8 +109,8 @@ def main():
     server_status = wait(server, deadline)
 
     failures = 0
-    failures += check("server answers the client on a real wire", server_status, read(server_log), SERVER_LINES)
-    failures += check("client reaches the server on a real wire", client_status, read(client_log), CLIENT_LINES)
+    failures += check("server: handshake and Courier with the client over a real wire", server_status, read(server_log), SERVER_LINES)
+    failures += check("client: handshake and Courier with the server over a real wire", client_status, read(client_log), CLIENT_LINES)
     if failures:
         print(f"      server log: {server_log}")
         print(f"      client log: {client_log}")

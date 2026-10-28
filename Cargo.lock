@@ -56,6 +56,7 @@ name = "user"
 version = "0.8.0"
 dependencies = [
  "abi",
+ "courier",
  "crypto",
  "drawbridge",
  "net",

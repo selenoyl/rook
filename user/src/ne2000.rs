@@ -50,6 +50,7 @@ const CR_PAGE1: u8 = 0x40;
 
 // Interrupt-status bits.
 const ISR_PRX: u8 = 0x01; // packet received
+const ISR_PTX: u8 = 0x02; // packet transmitted
 const ISR_RDC: u8 = 0x40; // remote DMA complete
 const ISR_RST: u8 = 0x80; // reset / overflow
 
@@ -212,11 +213,14 @@ impl Ne2000 {
         self.wait(ISR_RDC)?;
         self.put(ISR, ISR_RDC)?;
 
-        // Fire the transmitter.
+        // Fire the transmitter and wait for it to finish, so the next
+        // frame does not overwrite the transmit page mid-send.
         self.put(TPSR, TX_PAGE)?;
         self.put(TBCR0, len as u8)?;
         self.put(TBCR1, (len >> 8) as u8)?;
         self.put(CR, CR_STA | CR_TXP | CR_RD_ABORT)?;
+        self.wait(ISR_PTX)?;
+        self.put(ISR, ISR_PTX)?;
         Some(())
     }
 
