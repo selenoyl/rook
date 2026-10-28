@@ -24,12 +24,32 @@ fn run(
         msg3,
         session: sess_i,
         peer_identity: seen_r,
+        ..
     } = initiator.finish(&msg2)?;
     let ResponderDone {
         session: sess_r,
         peer_identity: seen_i,
+        ..
     } = responder.finish(&msg3)?;
     Ok((sess_i, sess_r, seen_r, seen_i))
+}
+
+/// Run a full handshake and return the saved key each side stored. They
+/// must match, since resumption depends on it.
+fn paired() -> SavedKey {
+    let (id_i, id_r) = ids();
+    let (initiator, msg1) = Initiator::start(&id_i, &[0x51; 32], Some(id_r.public()));
+    let (responder, msg2) = Responder::respond(&id_r, &[0x52; 32], &msg1).expect("respond");
+    let InitiatorDone {
+        msg3,
+        saved_key: saved_i,
+        ..
+    } = initiator.finish(&msg2).expect("initiator finish");
+    let ResponderDone {
+        saved_key: saved_r, ..
+    } = responder.finish(&msg3).expect("responder finish");
+    assert!(saved_i == saved_r, "both sides save the same key");
+    saved_i
 }
 
 #[test]
@@ -210,4 +230,96 @@ fn is_zero_detects_all_zero() {
     let mut x = [0u8; 32];
     x[31] = 1;
     assert!(!is_zero(&x));
+}
+
+/// Run one resumption from a stored saved key, returning both sessions and
+/// both ratcheted saved keys.
+fn resume_once(
+    saved: &SavedKey,
+    seed_i: &[u8; 32],
+    seed_r: &[u8; 32],
+) -> Result<(Session, Session, SavedKey, SavedKey), Error> {
+    let (initiator, rmsg1) = ResumeInitiator::start(saved, seed_i);
+    let ResumeResponderDone {
+        msg2,
+        session: sess_r,
+        new_saved: next_r,
+    } = resume_responder(saved, seed_r, &rmsg1)?;
+    let ResumeInitiatorDone {
+        session: sess_i,
+        new_saved: next_i,
+    } = initiator.finish(&msg2)?;
+    Ok((sess_i, sess_r, next_i, next_r))
+}
+
+#[test]
+fn resumption_agrees_and_ratchets() {
+    let saved = paired();
+    let (mut sess_i, mut sess_r, next_i, next_r) =
+        resume_once(&saved, &[0x60; 32], &[0x61; 32]).expect("resumption");
+
+    // Both sides derive the same ratcheted key, and it differs from the old.
+    assert!(next_i == next_r, "ratcheted saved keys agree");
+    assert!(next_i != saved, "the saved key ratcheted forward");
+
+    // The resumed session carries sealed traffic both ways.
+    let mut buf = *b"resumed in one round";
+    let tag = sess_i.seal(&mut buf).expect("seal");
+    assert!(sess_r.open(&mut buf, &tag).is_ok());
+    assert_eq!(&buf, b"resumed in one round");
+
+    let mut reply = *b"welcome back, friend";
+    let tag = sess_r.seal(&mut reply).expect("seal");
+    assert!(sess_i.open(&mut reply, &tag).is_ok());
+    assert_eq!(&reply, b"welcome back, friend");
+}
+
+#[test]
+fn resumption_chains_across_rounds() {
+    // The ratcheted key from one resumption drives the next.
+    let saved = paired();
+    let (_, _, next_i, next_r) = resume_once(&saved, &[1; 32], &[2; 32]).expect("round 1");
+    assert!(next_i == next_r);
+    let (mut sess_i, mut sess_r, again_i, again_r) =
+        resume_once(&next_i, &[3; 32], &[4; 32]).expect("round 2");
+    assert!(again_i == again_r);
+    assert!(again_i != next_i, "each round ratchets again");
+
+    let mut buf = *b"still in step";
+    let tag = sess_i.seal(&mut buf).expect("seal");
+    assert!(sess_r.open(&mut buf, &tag).is_ok());
+    assert_eq!(&buf, b"still in step");
+}
+
+#[test]
+fn resumption_rejects_a_wrong_saved_key() {
+    let saved = paired();
+    let wrong = SavedKey([0x99; 32]);
+    // The responder answers with a different saved key; its confirm tag
+    // cannot satisfy the initiator.
+    let (initiator, rmsg1) = ResumeInitiator::start(&saved, &[0x70; 32]);
+    let done = resume_responder(&wrong, &[0x71; 32], &rmsg1).expect("responder still answers");
+    assert_eq!(initiator.finish(&done.msg2).err(), Some(Error::BadTag));
+}
+
+#[test]
+fn resumption_tampered_reply_is_refused() {
+    let saved = paired();
+    let (initiator, rmsg1) = ResumeInitiator::start(&saved, &[0x80; 32]);
+    let mut done = resume_responder(&saved, &[0x81; 32], &rmsg1).expect("respond");
+    // Flip a byte of the confirm tag.
+    let last = done.msg2.len() - 1;
+    done.msg2[last] ^= 1;
+    assert_eq!(initiator.finish(&done.msg2).err(), Some(Error::BadTag));
+}
+
+#[test]
+fn resumption_refuses_a_low_order_ephemeral() {
+    let saved = paired();
+    // An all-zero ephemeral forces the all-zero DH output.
+    let rmsg1 = [0u8; RESUME_MSG1_LEN];
+    assert_eq!(
+        resume_responder(&saved, &[0x90; 32], &rmsg1).err(),
+        Some(Error::WeakKey)
+    );
 }

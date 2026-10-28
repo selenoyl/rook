@@ -159,6 +159,7 @@ fn handshake(me: &Identity, client: [u8; drawbridge::ID_LEN]) -> Option<Session>
     let ResponderDone {
         session,
         peer_identity,
+        ..
     } = responder.finish(&msg3).ok()?;
     (peer_identity == client).then_some(session)
 }

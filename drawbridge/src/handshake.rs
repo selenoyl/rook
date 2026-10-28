@@ -25,7 +25,8 @@
 use crate::{
     Error, HS_NONCE, ID_LEN, Identity, Keys, LABEL_MLKEM_D, LABEL_MLKEM_M, LABEL_MLKEM_Z,
     LABEL_X25519, MSG1_LEN, MSG2_LEN, MSG3_LEN, PAYLOAD, ROLE_INITIATOR, ROLE_RESPONDER, SIG_LEN,
-    Session, derive, expand_seed, hybrid_sign, hybrid_verify, is_zero, signed_message, transcript,
+    SavedKey, Session, derive, expand_seed, hybrid_sign, hybrid_verify, is_zero, resume_root,
+    signed_message, transcript,
 };
 use crypto::{
     MLKEM_CT_LEN, MLKEM_DK_LEN, MLKEM_EK_LEN, aead_open, aead_seal, mlkem_decaps, mlkem_encaps,
@@ -49,6 +50,8 @@ pub struct InitiatorDone {
     pub msg3: [u8; MSG3_LEN],
     pub session: Session,
     pub peer_identity: [u8; ID_LEN],
+    /// The key to store for this peer to run fast resumption later.
+    pub saved_key: SavedKey,
 }
 
 impl Initiator {
@@ -132,10 +135,12 @@ impl Initiator {
         msg3[..PAYLOAD].copy_from_slice(&payload);
         msg3[PAYLOAD..PAYLOAD + 16].copy_from_slice(&tag);
 
+        let saved_key = resume_root(&keys.resume, &self.identity.public(), &peer_identity);
         Ok(InitiatorDone {
             msg3,
             session: Session::new(keys.i2r, keys.r2i),
             peer_identity,
+            saved_key,
         })
     }
 }
@@ -144,12 +149,15 @@ impl Initiator {
 pub struct Responder {
     th: [u8; 64],
     keys: Keys,
+    own_id: [u8; ID_LEN],
 }
 
 /// What the responder has once the handshake completes.
 pub struct ResponderDone {
     pub session: Session,
     pub peer_identity: [u8; ID_LEN],
+    /// The key to store for this peer to run fast resumption later.
+    pub saved_key: SavedKey,
 }
 
 impl Responder {
@@ -191,7 +199,14 @@ impl Responder {
         sealed[..PAYLOAD].copy_from_slice(&payload);
         sealed[PAYLOAD..PAYLOAD + 16].copy_from_slice(&tag);
 
-        Ok((Responder { th, keys }, msg2))
+        Ok((
+            Responder {
+                th,
+                keys,
+                own_id: identity.public(),
+            },
+            msg2,
+        ))
     }
 
     /// Consume msg3: verify the initiator and produce the session. The
@@ -215,9 +230,11 @@ impl Responder {
             return Err(Error::BadSignature);
         }
 
+        let saved_key = resume_root(&self.keys.resume, &peer_identity, &self.own_id);
         Ok(ResponderDone {
             session: Session::new(self.keys.r2i, self.keys.i2r),
             peer_identity,
+            saved_key,
         })
     }
 }

@@ -192,6 +192,7 @@ fn vault_request() -> Result<(), &'static str> {
         msg3,
         mut session,
         peer_identity,
+        ..
     } = initiator.finish(&msg2).map_err(|_| "the vault handshake")?;
     expect(peer_identity == vault, "the vault's identity")?;
     expect(
@@ -255,6 +256,7 @@ fn drawbridge_over_ipc() -> Result<(), &'static str> {
         msg3,
         mut session,
         peer_identity,
+        ..
     } = initiator
         .finish(&msg2)
         .map_err(|_| "completing the handshake")?;

@@ -74,6 +74,7 @@ fn serve_drawbridge() -> Option<u64> {
     let ResponderDone {
         mut session,
         peer_identity,
+        ..
     } = responder.finish(&msg3).ok()?;
     // Only the task we were paired with may pass.
     if peer_identity != ward {

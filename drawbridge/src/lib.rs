@@ -33,9 +33,14 @@
 #![forbid(unsafe_code)]
 
 mod handshake;
+mod resume;
 mod session;
 
 pub use handshake::{Initiator, InitiatorDone, Responder, ResponderDone};
+pub use resume::{
+    RESUME_MSG1_LEN, RESUME_MSG2_LEN, ResumeInitiator, ResumeInitiatorDone, ResumeResponderDone,
+    resume as resume_responder,
+};
 pub use session::Session;
 
 use crypto::{
@@ -165,6 +170,8 @@ pub(crate) struct Keys {
     pub hs_i: [u8; 32],
     pub r2i: [u8; 32],
     pub i2r: [u8; 32],
+    /// The root both sides save to run fast resumption handshakes later.
+    pub resume: [u8; 32],
 }
 
 /// SHA-512 over the protocol label and every public value of the
@@ -196,19 +203,38 @@ pub(crate) fn derive(dh: &[u8; 32], pq: &[u8; 32], th: &[u8; 64]) -> Keys {
     ikm[..32].copy_from_slice(dh);
     ikm[32..].copy_from_slice(pq);
     let prk = extract_sha512(th, &ikm);
-    let mut okm = [0u8; 128];
+    let mut okm = [0u8; 160];
     expand_sha512(&prk, b"drawbridge keys v3", &mut okm);
     let mut keys = Keys {
         hs_r: [0; 32],
         hs_i: [0; 32],
         r2i: [0; 32],
         i2r: [0; 32],
+        resume: [0; 32],
     };
     keys.hs_r.copy_from_slice(&okm[0..32]);
     keys.hs_i.copy_from_slice(&okm[32..64]);
     keys.r2i.copy_from_slice(&okm[64..96]);
     keys.i2r.copy_from_slice(&okm[96..128]);
+    keys.resume.copy_from_slice(&okm[128..160]);
     keys
+}
+
+/// The key two paired machines save after a full handshake, to run fast
+/// resumption later. It is the handshake's resume root bound to *both*
+/// identities, in initiator-then-responder order (both sides know which is
+/// which), so a saved key can never be mistaken for one shared with a
+/// different peer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SavedKey(pub [u8; 32]);
+
+pub(crate) fn resume_root(resume: &[u8; 32], id_i: &[u8; ID_LEN], id_r: &[u8; ID_LEN]) -> SavedKey {
+    let prk = extract_sha512(resume, id_i);
+    let mut info = [0u8; ID_LEN];
+    info.copy_from_slice(id_r);
+    let mut out = [0u8; 32];
+    expand_sha512(&prk, &info, &mut out);
+    SavedKey(out)
 }
 
 /// Build `role || transcript` into a fixed buffer for signing or
@@ -267,6 +293,7 @@ pub fn self_test() -> bool {
         msg3,
         session: mut sess_i,
         peer_identity: seen_r,
+        ..
     } = match initiator.finish(&msg2) {
         Ok(done) => done,
         Err(_) => return false,
@@ -274,6 +301,7 @@ pub fn self_test() -> bool {
     let ResponderDone {
         session: mut sess_r,
         peer_identity: seen_i,
+        ..
     } = match responder.finish(&msg3) {
         Ok(done) => done,
         Err(_) => return false,
