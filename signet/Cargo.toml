@@ -1,0 +1,17 @@
+[package]
+name = "signet"
+description = "Rook's Signet: pocket approval of sensitive actions, by MAC or full signature"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[dependencies]
+crypto = { path = "../crypto" }
+drawbridge = { path = "../drawbridge" }
+
+[lints]
+workspace = true

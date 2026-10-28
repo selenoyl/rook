@@ -62,7 +62,7 @@ const ED_SIG: usize = 64; // Ed25519 signature
 /// ML-DSA-87 key. Pinning or trusting a peer means pinning these bytes.
 pub const ID_LEN: usize = ED_PUB + MLDSA_PK_LEN; // 2624
 /// A hybrid signature over the transcript: Ed25519 then ML-DSA-87.
-const SIG_LEN: usize = ED_SIG + crypto::MLDSA_SIG_LEN; // 4691
+pub const SIG_LEN: usize = ED_SIG + crypto::MLDSA_SIG_LEN; // 4691
 /// The sealed handshake payload: identity ‖ signature.
 const PAYLOAD: usize = ID_LEN + SIG_LEN; // 7315
 /// That payload once sealed: plus the 16-byte AEAD tag.
@@ -147,7 +147,7 @@ impl Identity {
 
 /// Sign `msg` with both halves of `id`: Ed25519 then ML-DSA-87, packed into
 /// one `SIG_LEN` buffer.
-pub(crate) fn hybrid_sign(id: &Identity, msg: &[u8]) -> [u8; SIG_LEN] {
+pub fn hybrid_sign(id: &Identity, msg: &[u8]) -> [u8; SIG_LEN] {
     let mut out = [0u8; SIG_LEN];
     out[..ED_SIG].copy_from_slice(&crypto::sign(&id.ed_secret, msg));
     out[ED_SIG..].copy_from_slice(&mldsa_sign(msg, &id.mldsa_secret));
@@ -157,7 +157,7 @@ pub(crate) fn hybrid_sign(id: &Identity, msg: &[u8]) -> [u8; SIG_LEN] {
 /// Verify a hybrid signature against a public identity. Both the Ed25519
 /// and the ML-DSA-87 signature must check — breaking one scheme is not
 /// enough to forge.
-pub(crate) fn hybrid_verify(id: &[u8; ID_LEN], msg: &[u8], sig: &[u8; SIG_LEN]) -> bool {
+pub fn hybrid_verify(id: &[u8; ID_LEN], msg: &[u8], sig: &[u8; SIG_LEN]) -> bool {
     let mut ed_public = [0u8; ED_PUB];
     ed_public.copy_from_slice(&id[..ED_PUB]);
     let mut mldsa_public = [0u8; MLDSA_PK_LEN];

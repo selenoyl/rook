@@ -267,6 +267,31 @@ seat, a wrong signature, a tampered hash, an older version, the wrong
 Table, an expired approval, and a malformed Table. Signing is deterministic
 and, like the crypto beneath it, **not audited**.
 
+## The Signet (`signet/`)
+
+An optional pocket approval device: a login, an admin action or an update
+can be made to need a press on a Knight. The service sends a one-time
+challenge, the Knight shows the request, and a press approves it. `signet`
+is the cryptographic core, built on `crypto` and `drawbridge`:
+
+- **Everyday** approvals are a 32-byte MAC under a *short-code key* — a
+  Drawbridge `SavedKey` the Knight and the service share from pairing — so
+  an approval fits in one packet. The service's prompt carries a MAC too,
+  so the Knight only ever shows a real request, not one an attacker forged.
+- **High-value** actions take the full hybrid Ed25519 + ML-DSA-87 signature
+  under the Knight's long-term identity (~4.7 KB), verifiable by anyone
+  holding its public key. The service's policy, never the request, decides
+  which form an action needs.
+- Either form binds the exact request — the service, the action, the
+  **matched number** the person compared on both screens, a fresh
+  challenge, the direction, and an expiry — so changing any of them breaks
+  it.
+
+Ten host tests cover both paths and every refusal: expiry, a wrong key, a
+tampered field, a prompt that is not an approval, and a signature from
+another Knight. Enrollment, the number-matching interface, batch receipts
+and key renewal are still to come. Not audited.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -324,6 +349,7 @@ addresses; the loader parses no ELF at all.
 | `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
+| `signet/` | The Signet: MAC and full-signature approvals of sensitive actions from a Knight, built on `crypto` and `drawbridge`. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |

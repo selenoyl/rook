@@ -33,6 +33,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "signet"
+version = "0.8.0"
+dependencies = [
+ "crypto",
+ "drawbridge",
+]
+
+[[package]]
 name = "user"
 version = "0.8.0"
 dependencies = [
