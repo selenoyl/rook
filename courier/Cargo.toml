@@ -1,0 +1,16 @@
+[package]
+name = "courier"
+description = "Rook's reliable, multi-stream transport, carried inside Drawbridge over datagrams"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[dependencies]
+crypto = { path = "../crypto" }
+
+[lints]
+workspace = true

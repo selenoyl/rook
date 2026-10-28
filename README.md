@@ -299,6 +299,33 @@ tampered field, a prompt that is not an approval, and a signature from
 another Knight. Enrollment, the number-matching interface, batch receipts
 and key renewal are still to come. Not audited.
 
+## Courier (`courier/`)
+
+Across machines, Drawbridge's byte messages ride **Courier**, the doc's
+reliable, multi-stream transport — carried inside Drawbridge over UDP, so
+over an ordinary Wi-Fi or Ethernet network. It is modelled on QUIC, not a
+modified TCP: a datagram link that loses, reorders and duplicates packets
+becomes a set of independent **streams**, each an ordered, reliable run of
+messages.
+
+- A loss on one stream never stalls another — each stream delivers in
+  order on its own, and out-of-order messages wait in a bounded buffer.
+- Only the packets that actually went missing are resent: every message is
+  acknowledged, and a retransmit timer resends just the unacknowledged.
+- Every packet is sealed with ChaCha20-Poly1305 under a **monotonic packet
+  number** as its nonce, so the headers are encrypted and checked on every
+  packet and — unlike a Drawbridge session, which assumes ordered delivery
+  — Courier needs no order underneath it; a reordered, duplicated or
+  replayed packet is handled, not fatal. Its two directional keys come from
+  a Drawbridge handshake: Courier is what runs *inside* the sealed channel.
+
+It is driven by a pull API (`send`, `poll_transmit`, `on_packet`,
+`poll_deliver`, `tick`), so its nine host tests prove reliable, in-order,
+stream-independent delivery over a simulated lossy, reordering, duplicating
+link with no network card yet. Flow and congestion control, connection
+migration between links, byte-stream framing, and the binding to a real NIC
+and UDP are deferred. Not audited.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -357,6 +384,7 @@ addresses; the loader parses no ELF at all.
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
 | `signet/` | The Signet: MAC and full-signature approvals of sensitive actions from a Knight, built on `crypto` and `drawbridge`. No `unsafe` |
+| `courier/` | Courier: reliable, multi-stream delivery over a lossy datagram link, each packet sealed — the transport that rides inside Drawbridge over UDP. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |

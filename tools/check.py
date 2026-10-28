@@ -19,6 +19,7 @@ CRATES = [
     "keep/src",
     "user/src",
     "abi/src",
+    "courier/src",
     "crypto/src",
     "drawbridge/src",
     "seal/src",
