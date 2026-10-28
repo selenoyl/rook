@@ -1,0 +1,13 @@
+[package]
+name = "net"
+description = "Rook's packet framing: Ethernet, ARP, IPv4 and UDP, parsed and built under the Gatehouse rules"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[lints]
+workspace = true

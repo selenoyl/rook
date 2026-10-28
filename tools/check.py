@@ -20,6 +20,7 @@ CRATES = [
     "user/src",
     "abi/src",
     "courier/src",
+    "net/src",
     "crypto/src",
     "drawbridge/src",
     "seal/src",

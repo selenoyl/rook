@@ -385,6 +385,7 @@ addresses; the loader parses no ELF at all.
 | `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
 | `signet/` | The Signet: MAC and full-signature approvals of sensitive actions from a Knight, built on `crypto` and `drawbridge`. No `unsafe` |
 | `courier/` | Courier: reliable, multi-stream delivery over a lossy datagram link, each packet sealed — the transport that rides inside Drawbridge over UDP. No `unsafe` |
+| `net/` | Packet framing: Ethernet, ARP, IPv4 and UDP, parsed and built under the Gatehouse rules. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |

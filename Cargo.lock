@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "net"
+version = "0.8.0"
+
+[[package]]
 name = "seal"
 version = "0.8.0"
 dependencies = [
