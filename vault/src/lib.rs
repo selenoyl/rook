@@ -8,11 +8,13 @@
 //! Layout. Block 0 is the superblock: a 32-byte header followed by a fixed
 //! directory of entries. Each file's bytes live in a run of consecutive
 //! blocks; allocation is a bump pointer (`next_free`), so there is no free
-//! list and no fragmentation to reason about. This cannot reclaim a
-//! deleted file's blocks — fine for an image that is written once and
-//! mostly read — and it is not a general-purpose filesystem. It is enough
-//! for Rook to keep programs and data on disk instead of baked into the
-//! boot image, served by a user-space task behind a Writ.
+//! list and no fragmentation to reason about. Deleting a file reclaims its
+//! blocks by compaction: the files above the gap slide down into it, so the
+//! data stays packed from block 1 up to `next_free` and the bump invariant
+//! holds. It is not a general-purpose filesystem — the directory is fixed
+//! and compaction is not crash-atomic — but it is enough for Rook to keep
+//! programs and data on disk instead of baked into the boot image, served
+//! by a user-space task behind a Writ.
 //!
 //! Everything here treats the disk as untrusted: every offset read from it
 //! is checked against the device size before it is used, so a corrupt or
@@ -292,6 +294,84 @@ impl<D: BlockDevice> Vault<D> {
         let sb = self.sb;
         self.dev.write_block(0, &sb)?;
         Ok(())
+    }
+
+    /// Create the file `name` holding `data`, replacing any file already by
+    /// that name. Unlike [`create`](Self::create), an existing name is not
+    /// an error — its blocks are freed first. The replacement is refused
+    /// (leaving the old file intact) if there isn't room for it.
+    pub fn write(&mut self, name: &[u8], data: &[u8]) -> Result<(), Error> {
+        if name.is_empty() || name.len() > NAME_LEN {
+            return Err(Error::BadName);
+        }
+        if data.len() > u32::MAX as usize {
+            return Err(Error::NoSpace);
+        }
+        if let Some(old) = self.lookup(name) {
+            // Make sure the new file fits before freeing the old one, so a
+            // too-large overwrite can't lose the existing file.
+            let span_new = len_blocks(data.len() as u32);
+            let available = self.free_blocks() + old.block_span();
+            if span_new > available {
+                return Err(Error::NoSpace);
+            }
+            self.delete(name)?;
+        }
+        self.create(name, data)
+    }
+
+    /// Delete the file `name`, reclaiming its blocks. Every file stored
+    /// above the deleted one slides down into the gap, so the layout stays
+    /// contiguous and `next_free` drops by the freed span.
+    pub fn delete(&mut self, name: &[u8]) -> Result<(), Error> {
+        let victim_slot = self.slot_of(name).ok_or(Error::NotFound)?;
+        let gap_start = rd_u32(&self.sb, HEADER + victim_slot * ENTRY + E_START) as u64;
+        let gap_span = len_blocks(rd_u32(&self.sb, HEADER + victim_slot * ENTRY + E_LEN));
+
+        // Slide every file above the gap down by the freed span.
+        for i in 0..MAX_FILES {
+            let base = HEADER + i * ENTRY;
+            if rd_u32(&self.sb, base + E_FLAGS) & FLAG_USED == 0 {
+                continue;
+            }
+            let start = rd_u32(&self.sb, base + E_START) as u64;
+            if start <= gap_start {
+                continue;
+            }
+            let span = len_blocks(rd_u32(&self.sb, base + E_LEN));
+            self.move_run(start, start - gap_span, span)?;
+            wr_u32(&mut self.sb, base + E_START, (start - gap_span) as u32);
+        }
+
+        // Clear the victim's slot and shrink the bump pointer.
+        let base = HEADER + victim_slot * ENTRY;
+        for b in self.sb[base..base + ENTRY].iter_mut() {
+            *b = 0;
+        }
+        let next_free = self.next_free() - gap_span;
+        let count = self.file_count().saturating_sub(1);
+        wr_u32(&mut self.sb, OFF_NEXT_FREE, next_free as u32);
+        wr_u32(&mut self.sb, OFF_FILE_COUNT, count);
+        let sb = self.sb;
+        self.dev.write_block(0, &sb)?;
+        Ok(())
+    }
+
+    /// Copy a `span`-block run from `from` down to `to` (`to < from`).
+    /// Copying low block first is safe because the destination is below the
+    /// source, so it never overwrites a block not yet read.
+    fn move_run(&mut self, from: u64, to: u64, span: u64) -> Result<(), Error> {
+        let mut block = [0u8; BLOCK];
+        for b in 0..span {
+            self.dev.read_block(from + b, &mut block)?;
+            self.dev.write_block(to + b, &block)?;
+        }
+        Ok(())
+    }
+
+    /// The directory slot holding `name`, if any.
+    fn slot_of(&self, name: &[u8]) -> Option<usize> {
+        (0..MAX_FILES).find(|&i| self.entry(i).is_some_and(|e| e.name() == name))
     }
 
     /// The first free directory slot, if any.
