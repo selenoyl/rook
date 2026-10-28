@@ -189,11 +189,20 @@ identity — and trade a sealed message, with a small fragmentation layer
 register-sized IPC packets. The two use fixed demo identity keys, clearly
 marked as such; real ones come from per-device entropy and Castling.
 
-Both the key exchange and the identity are now hybrid — classical *and*
-post-quantum, so an attacker must break both. What remains is the **Great
-Seal**: Rook's software updates are signed by a k-of-n **Round Table**,
-each seat an Ed25519 and an **SLH-DSA** key (SLH-DSA is implemented in
-`crypto`); that threshold signing is the next crypto step.
+Both the key exchange and the identity are hybrid — classical *and*
+post-quantum, so an attacker must break both.
+
+The full handshake above is **first contact**. It is heavy — the two
+~4.6 KB ML-DSA signatures dominate — so machines run it only once per
+peer, then save a key and **resume**. A resumption is two tiny messages
+(32 and 48 bytes, one LoRa packet): a fresh X25519 exchange keyed by the
+saved key, with no signatures and no ML-KEM, authenticated because only
+the real peer holds that key. Each resumption ratchets the saved key
+forward. Two machines can also establish the first saved key **in person**
+by **Castling** — a hybrid exchange over IR or a link cable, authenticated
+by presence and a six-digit code the two people compare, so no relay can
+sit between them. Both paths are in `drawbridge` and covered by host tests;
+wiring resumption and Castling into the running ring-3 demo comes next.
 
 ## Storage: the Vault (`vault/`)
 

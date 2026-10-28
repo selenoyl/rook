@@ -323,3 +323,70 @@ fn resumption_refuses_a_low_order_ephemeral() {
         Some(Error::WeakKey)
     );
 }
+
+#[test]
+fn castling_pairs_and_then_resumption_takes_over() {
+    let (id_a, id_b) = ids();
+    let (initiator, msg1) = castle_start(&id_a, &[0xa1; 32]);
+    let b = castle_respond(&id_b, &[0xb2; 32], &msg1).expect("castle respond");
+    let a = initiator.finish(&b.msg2).expect("castle finish");
+
+    // Each side learned the other's real identity in person.
+    assert_eq!(a.peer_identity, id_b.public());
+    assert_eq!(b.peer_identity, id_a.public());
+    // Both derived the same saved key and the same verification code.
+    assert!(a.saved_key == b.saved_key, "castling agrees on a saved key");
+    assert_eq!(a.sas, b.sas, "both show the same six-digit code");
+    assert!(a.sas.0 < 1_000_000, "the code is six digits");
+
+    // From here the pair resumes with the castled key — no full handshake.
+    let (mut sess_i, mut sess_r, _, _) =
+        resume_once(&a.saved_key, &[0xc3; 32], &[0xd4; 32]).expect("resume after castling");
+    let mut buf = *b"paired in person";
+    let tag = sess_i.seal(&mut buf).expect("seal");
+    assert!(sess_r.open(&mut buf, &tag).is_ok());
+    assert_eq!(&buf, b"paired in person");
+}
+
+#[test]
+fn castling_tampered_reply_is_refused() {
+    let (id_a, id_b) = ids();
+    let (initiator, msg1) = castle_start(&id_a, &[0xa1; 32]);
+    let mut b = castle_respond(&id_b, &[0xb2; 32], &msg1).expect("castle respond");
+    let last = b.msg2.len() - 1;
+    b.msg2[last] ^= 1; // flip a byte of the confirm tag
+    assert_eq!(initiator.finish(&b.msg2).err(), Some(Error::BadTag));
+}
+
+#[test]
+fn castling_refuses_a_weak_point() {
+    let (id_a, id_b) = ids();
+    let (_initiator, mut msg1) = castle_start(&id_a, &[0xa1; 32]);
+    // Zero the initiator's X25519 ephemeral: the DH output is all zeros.
+    for b in msg1[ID_LEN..ID_LEN + 32].iter_mut() {
+        *b = 0;
+    }
+    assert_eq!(
+        castle_respond(&id_b, &[0xb2; 32], &msg1).err(),
+        Some(Error::WeakKey)
+    );
+}
+
+#[test]
+fn distinct_castlings_differ() {
+    let (id_a, id_b) = ids();
+    let first = {
+        let (i, m) = castle_start(&id_a, &[1; 32]);
+        let b = castle_respond(&id_b, &[2; 32], &m).expect("respond");
+        i.finish(&b.msg2).expect("finish")
+    };
+    let second = {
+        let (i, m) = castle_start(&id_a, &[3; 32]);
+        let b = castle_respond(&id_b, &[4; 32], &m).expect("respond");
+        i.finish(&b.msg2).expect("finish")
+    };
+    assert!(
+        first.saved_key != second.saved_key,
+        "fresh ephemerals give a fresh key"
+    );
+}

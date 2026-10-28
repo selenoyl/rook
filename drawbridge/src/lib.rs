@@ -32,10 +32,15 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+mod castling;
 mod handshake;
 mod resume;
 mod session;
 
+pub use castling::{
+    CASTLE_MSG1_LEN, CASTLE_MSG2_LEN, CastleDone, CastleInitiator, CastleResponderDone, Sas,
+    castle_respond, castle_start,
+};
 pub use handshake::{Initiator, InitiatorDone, Responder, ResponderDone};
 pub use resume::{
     RESUME_MSG1_LEN, RESUME_MSG2_LEN, ResumeInitiator, ResumeInitiatorDone, ResumeResponderDone,
