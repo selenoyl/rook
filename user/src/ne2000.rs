@@ -65,6 +65,12 @@ const MIN_FRAME: usize = 60;
 /// hanging the task.
 const POLL_LIMIT: u32 = 2_000_000;
 
+/// The most bytes a single `io_read`/`io_write` moves: the Keep caps a
+/// transfer at `MAX_IO_WORDS` 16-bit words. A frame larger than this is
+/// streamed through the data port in several calls against one remote-DMA
+/// setup, since the card advances its own address as the port is read.
+const IO_CHUNK: usize = abi::MAX_IO_WORDS as usize * 2;
+
 /// The NE2000 driver, holding its I/O Writ handle and the card's MAC.
 pub struct Ne2000 {
     io: u64,
@@ -164,7 +170,9 @@ impl Ne2000 {
         self.put(RSAR0, addr as u8)?;
         self.put(RSAR1, (addr >> 8) as u8)?;
         self.put(CR, CR_STA | CR_RD_READ)?;
-        crate::io_read(self.io, DATA, out).ok()?;
+        for chunk in out.chunks_mut(IO_CHUNK) {
+            crate::io_read(self.io, DATA, chunk).ok()?;
+        }
         self.wait(ISR_RDC)?;
         self.put(ISR, ISR_RDC)?;
         Some(())
@@ -198,7 +206,9 @@ impl Ne2000 {
         self.put(RSAR0, 0)?; // low byte of TX_PAGE << 8
         self.put(RSAR1, TX_PAGE)?;
         self.put(CR, CR_STA | CR_RD_WRITE)?;
-        crate::io_write(self.io, DATA, &buf[..padded]).ok()?;
+        for chunk in buf[..padded].chunks(IO_CHUNK) {
+            crate::io_write(self.io, DATA, chunk).ok()?;
+        }
         self.wait(ISR_RDC)?;
         self.put(ISR, ISR_RDC)?;
 

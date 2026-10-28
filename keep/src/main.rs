@@ -194,12 +194,13 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         Some("crash") => Some((
             spawn_check(&booted.check, abi::check::CRASH, michael),
             Watch::Crash,
+            None,
         )),
         _ => {
             let check = spawn_check(&booted.check, abi::check::CALLS, michael);
             spawn_vault(&booted.vault);
-            spawn_gabriel(&booted.gabriel);
-            Some((check, Watch::Checks))
+            let gabriel = spawn_gabriel(&booted.gabriel);
+            Some((check, Watch::Checks, Some(gabriel)))
         }
     };
 
@@ -209,7 +210,7 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
     );
 
     match watch {
-        Some((check, how)) => supervise(michael, check, how, check_ok),
+        Some((check, how, gabriel)) => supervise(michael, check, how, check_ok, gabriel),
         None => sched::become_idle(),
     }
 }
@@ -220,7 +221,13 @@ fn on_off(on: bool) -> &'static str {
 
 /// Watch the ring-3 test program finish, report the result, and in
 /// self-test mode end the run.
-fn supervise(michael: usize, check: usize, how: Watch, check_ok: bool) -> ! {
+fn supervise(
+    michael: usize,
+    check: usize,
+    how: Watch,
+    check_ok: bool,
+    gabriel: Option<usize>,
+) -> ! {
     let outcome = loop {
         arch::cpu::wait_for_interrupt();
         if let Some(outcome) = sched::outcome(check) {
@@ -256,6 +263,15 @@ fn supervise(michael: usize, check: usize, how: Watch, check_ok: bool) -> ! {
         if passed { "works" } else { "FAILED" }
     );
     banner::draw_checks(check_ok, Some(passed));
+
+    // Gabriel drives the network card concurrently; wait for him to finish
+    // his proof before tearing the machine down, so his result reaches the
+    // log. He bounds his own polling, so this cannot hang the Keep.
+    let net_ok = match gabriel {
+        Some(g) => wait_for_gabriel(g),
+        None => true,
+    };
+    let passed = passed && net_ok;
 
     if SELFTEST.load(Ordering::Relaxed) {
         let selftest = BOOT_OK.load(Ordering::Relaxed) && passed;
@@ -526,6 +542,31 @@ fn spawn_gabriel(program: &user::Program) -> usize {
             count: NIC_IO_COUNT,
         }],
     )
+}
+
+/// Wait for Gabriel to finish driving the network card and report how it
+/// went, returning whether he exited cleanly. He bounds his own polling to
+/// a couple of seconds, so this waits generously but not forever; never
+/// finishing counts as a failure rather than hanging the machine.
+fn wait_for_gabriel(gabriel: usize) -> bool {
+    const WAIT_TICKS: u64 = 10 * TICKS_PER_SECOND;
+    for _ in 0..WAIT_TICKS {
+        if let Some(outcome) = sched::outcome(gabriel) {
+            let ok = outcome == Outcome::Exited(0);
+            kprintln!(
+                "[keep] user: gabriel {}",
+                if ok {
+                    "carried traffic on a real link"
+                } else {
+                    "could not use the network"
+                }
+            );
+            return ok;
+        }
+        arch::cpu::wait_for_interrupt();
+    }
+    kprintln!("[keep] user: gabriel did not finish in time");
+    false
 }
 
 /// The kernel-task-stack test: recurse until the task's stack runs out.
