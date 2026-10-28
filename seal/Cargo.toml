@@ -1,0 +1,16 @@
+[package]
+name = "seal"
+description = "Rook's Great Seal: k-of-n Round Table signatures over software updates"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+test = true
+bench = false
+
+[dependencies]
+crypto = { path = "../crypto" }
+
+[lints]
+workspace = true

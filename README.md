@@ -221,6 +221,38 @@ could end like any other; a bug there cannot corrupt the Keep, and the
 bytes it serves never cross an endpoint in the clear. The on-disk image is
 built by `tools/mkvault.py` and attached to QEMU as an IDE drive.
 
+## The Great Seal (`seal/`)
+
+Rook accepts a software update only when enough members of the **Round
+Table** have signed it — never on one key's say-so. The `seal` crate is
+that rule, built on `crypto`:
+
+- The **Round Table** is a small signed policy: a list of **seats** (each
+  one Ed25519 key and one SLH-DSA key) and a threshold `k`. The **Great
+  Seal** is `k` separate seats each signing the same update, with *both* of
+  their keys — so the approval holds even if elliptic curves fall, and
+  SLH-DSA's conservative hash-based security guards the most consequential
+  signature Rook has. Requiring `k` separate signatures (not threshold
+  cryptography) is what lets the Table use SLH-DSA and keep each seat on its
+  own offline device.
+- The threshold stays **below** the seat count, so a lost or offline backup
+  seat can never lock everyone out.
+- Two counters stop rollback. An update names a **monotonic image version**,
+  and a node refuses anything below the version it has booted; the **Table
+  itself is versioned**, so an old Table can't be replayed to re-admit a
+  retired seat. **Changing the Table needs the current Table's approval.**
+- Every approval binds the image hash, the image version, the Table version,
+  and an install-by **expiry**, and an image approval can never be replayed
+  as a Table one.
+
+This is the signing side of Raphael, the healer angel, who will apply
+sealed updates and roll back bad ones. The crate holds no secrets itself;
+its 14 host tests cover a 2-of-3 Table sealing an image and authorizing a
+new Table, and every rule that must refuse one — too few seats, a repeated
+seat, a wrong signature, a tampered hash, an older version, the wrong
+Table, an expired approval, and a malformed Table. Signing is deterministic
+and, like the crypto beneath it, **not audited**.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -277,6 +309,7 @@ addresses; the loader parses no ELF at all.
 | `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
 | `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
+| `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
 | `vault/` | The Vault filesystem over a `BlockDevice` trait, host-tested. No `unsafe` |
 | `tools/mkvault.py` | Builds a raw disk image holding a Vault filesystem |
 | `keep/assets/`, `tools/shadow_art.py` | Rufus (the Rook logo) and the ROOK wordmark as block art, and the tool that redraws the logo from `logo-grid.txt` |
@@ -306,11 +339,12 @@ The Keep's privileged core is in place; the crypto foundation, the
 Drawbridge handshake and a ring-3 storage service are down. What's left
 builds on top:
 
-1. **The Great Seal**: Rook's software updates signed by a k-of-n **Round
-   Table**, each seat an Ed25519 and an SLH-DSA key, with a threshold below
-   the seat count. The hybrid identity (Ed25519 + ML-DSA-87) and the hybrid
-   key exchange (X25519 + ML-KEM-1024) are done; this is the next crypto
-   milestone.
+1. **Raphael and live updates**: the Great Seal's signing and verification
+   are done (`seal/`); what remains is the healer angel that uses them —
+   verifying a sealed image, swapping A/B slots, persisting the monotonic
+   version counter, and rolling back a build that never checks in. The
+   hybrid identity (Ed25519 + ML-DSA-87) and hybrid key exchange
+   (X25519 + ML-KEM-1024) are already in place.
 2. **A fuller Vault**: writes and deletion from a client over the sealed
    channel, and freed-space reclamation, so the disk is read-write, not
    just read-mostly.

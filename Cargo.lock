@@ -26,6 +26,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "seal"
+version = "0.8.0"
+dependencies = [
+ "crypto",
+]
+
+[[package]]
 name = "user"
 version = "0.8.0"
 dependencies = [
