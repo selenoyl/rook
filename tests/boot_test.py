@@ -47,6 +47,7 @@ CASES = [
             "[vault] motd: The Keep holds. Rook stands watch.",
             "[vault] drawbridge: secure channel open with the client",
             "[check] vault: read, wrote and deleted a file over a sealed Drawbridge channel",
+            "[gabriel] gabriel: network card sends and receives on a real link",
             "[check] all checks passed",
             "the ring-3 test program ran its checks and exited with 0",
             "[keep] user: ring 3 works",
@@ -126,6 +127,9 @@ def run(kernel, cmdline, log):
         "-m", "128M", "-display", "none", "-no-reboot",
         "-serial", f"file:{log}",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+        # A NE2000 NIC on QEMU's user network, so Gabriel has a card to drive.
+        "-netdev", "user,id=n0",
+        "-device", "ne2k_isa,netdev=n0",
     ]
     # Attach the Vault's disk image if it was built next to the kernel, so
     # the storage service has a disk to drive.

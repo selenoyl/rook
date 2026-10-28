@@ -9,6 +9,7 @@ publish = false
 abi = { path = "../abi" }
 crypto = { path = "../crypto" }
 drawbridge = { path = "../drawbridge" }
+net = { path = "../net" }
 vault = { path = "../vault" }
 
 [lib]
@@ -27,6 +28,11 @@ bench = false
 
 [[bin]]
 name = "vault"
+test = false
+bench = false
+
+[[bin]]
+name = "gabriel"
 test = false
 bench = false
 

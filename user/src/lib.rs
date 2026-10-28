@@ -12,6 +12,7 @@
 pub mod sys;
 
 pub mod ata;
+pub mod ne2000;
 
 pub use abi;
 pub use abi::Error;

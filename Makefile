@@ -10,6 +10,7 @@ IMAGE    := build/keep.bin
 DISK     := build/disk.img
 QEMU     := qemu-system-x86_64 -cpu max -m 128M -no-reboot
 DRIVE    := -drive file=$(DISK),format=raw,if=ide
+NET      := -netdev user,id=n0 -device ne2k_isa,netdev=n0
 
 .PHONY: all build user run test check screen disk clean FORCE
 
@@ -37,7 +38,7 @@ $(DISK):
 	python3 tools/mkvault.py $(DISK)
 
 run: build $(DISK)
-	$(QEMU) -kernel $(IMAGE) $(DRIVE) -serial stdio
+	$(QEMU) -kernel $(IMAGE) $(DRIVE) $(NET) -serial stdio
 
 check:
 	cargo fmt --check

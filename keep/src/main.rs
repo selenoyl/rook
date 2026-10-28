@@ -49,6 +49,11 @@ const VAULT_REPLY_EP: usize = 3;
 const ATA_IO_BASE: u16 = 0x1F0;
 const ATA_IO_COUNT: u16 = 8;
 
+/// The NE2000 network card's I/O ports (0x300..0x320), which Gabriel's I/O
+/// Writ covers so the messenger can drive the card from ring 3.
+const NIC_IO_BASE: u16 = 0x300;
+const NIC_IO_COUNT: u16 = 0x20;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Memory below 1 MiB belongs to the BIOS and devices.
@@ -193,6 +198,7 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         _ => {
             let check = spawn_check(&booted.check, abi::check::CALLS, michael);
             spawn_vault(&booted.vault);
+            spawn_gabriel(&booted.gabriel);
             Some((check, Watch::Checks))
         }
     };
@@ -293,6 +299,7 @@ struct Booted {
     michael: user::Program,
     check: user::Program,
     vault: user::Program,
+    gabriel: user::Program,
 }
 
 /// Replace the boot page tables with the Keep's own, load the user
@@ -336,6 +343,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
     let michael = load_program("michael", programs::MICHAEL, &kernel.space, &mut frames);
     let check = load_program("check", programs::CHECK, &kernel.space, &mut frames);
     let vault = load_program("vault", programs::VAULT, &kernel.space, &mut frames);
+    let gabriel = load_program("gabriel", programs::GABRIEL, &kernel.space, &mut frames);
 
     frames.seal();
     kprintln!(
@@ -355,6 +363,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
         michael,
         check,
         vault,
+        gabriel,
     }
 }
 
@@ -502,6 +511,20 @@ fn spawn_vault(program: &user::Program) -> usize {
                 badge: 0,
             },
         ],
+    )
+}
+
+/// Start the `gabriel` messenger: an I/O Writ for the network card's ports
+/// (handle 0) and nothing else, so the NIC driver runs in ring 3.
+fn spawn_gabriel(program: &user::Program) -> usize {
+    spawn_user(
+        "gabriel",
+        program,
+        0,
+        &[Writ::Io {
+            base: NIC_IO_BASE,
+            count: NIC_IO_COUNT,
+        }],
     )
 }
 

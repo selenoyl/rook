@@ -13,3 +13,6 @@ pub const CHECK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/check.elf"));
 
 /// vault: the storage service that owns the disk.
 pub const VAULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vault.elf"));
+
+/// gabriel: the messenger, who drives the network card.
+pub const GABRIEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gabriel.elf"));

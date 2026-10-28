@@ -58,6 +58,7 @@ dependencies = [
  "abi",
  "crypto",
  "drawbridge",
+ "net",
  "vault",
 ]
 

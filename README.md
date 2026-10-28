@@ -26,6 +26,10 @@ What runs today:
 - The **Vault**, a storage service: an ATA driver and a filesystem in ring
   3, reaching the disk only through an I/O Writ and serving files to other
   tasks over an endpoint.
+- **Gabriel**, the messenger: a ring-3 **NE2000 network driver** behind an
+  I/O Writ, with **Ethernet/ARP/IPv4/UDP** framing and the **Courier**
+  transport. At boot he drives a real (emulated) card and exchanges packets
+  on the wire — an ARP request to the gateway and its reply.
 
 Everything here is `#![forbid(unsafe_code)]` except two named low-level
 modules, builds with no external crates, and is covered by host unit tests
@@ -326,6 +330,24 @@ link with no network card yet. Flow and congestion control, connection
 migration between links, byte-stream framing, and the binding to a real NIC
 and UDP are deferred. Not audited.
 
+## Gabriel: on a real wire (`user/src/ne2000.rs`, `user/src/bin/gabriel.rs`)
+
+Gabriel is the messenger angel — the task that carries traffic between Rook
+machines over the network. He puts the pieces above onto an actual link:
+
+- `user::ne2000` is a ring-3 **NE2000 network driver**, PIO and polled like
+  the ATA driver, reaching the card only through an I/O Writ for its ports
+  (QEMU's `ne2k_isa` at 0x300) and nothing else. It resets the card, reads
+  its MAC from the card's PROM over remote DMA, transmits frames, and reads
+  received frames from the card's ring, following the ring's wrap.
+- The `gabriel` task brings the card up and proves it carries real traffic:
+  it builds an **ARP** request with the `net` crate, broadcasts it, and
+  waits for the gateway's reply — so at every boot Rook sends *and* receives
+  a packet on the wire, driven entirely from an unprivileged task.
+
+Carrying UDP (and Courier over it) to a peer is the next step; the framing
+(`net`) and the transport (`courier`) are already in place.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -379,7 +401,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/trap.rs` | What to do on each CPU exception |
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
-| `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, and `vault` the storage service; `user/src/ata.rs` is the ring-3 ATA driver. `user/src/sys.rs` is the other place `unsafe` is allowed |
+| `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, `vault` the storage service, and `gabriel` the messenger; `user/src/ata.rs` and `user/src/ne2000.rs` are the ring-3 ATA and NE2000 drivers. `user/src/sys.rs` is the other place `unsafe` is allowed |
 | `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
