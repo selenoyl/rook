@@ -166,14 +166,14 @@ fn run_checks() -> Result<(), &'static str> {
     // The storage service: open a Drawbridge session with the Vault and
     // read a file over it — encrypted and authenticated end to end.
     vault_request()?;
-    let _ = user::log("vault: read motd over a sealed Drawbridge channel, verified");
+    let _ = user::log("vault: read, wrote and deleted a file over a sealed Drawbridge channel");
     Ok(())
 }
 
-/// Open a Drawbridge session with the Vault, then ask it for the "motd"
-/// file over that sealed channel and confirm the bytes — a user-space
-/// storage service reached through a capability and an authenticated,
-/// post-quantum-hybrid session.
+/// Open a Drawbridge session with the Vault and exercise it over that
+/// sealed channel: read the shipped motd, then write, read back and delete
+/// a file — a user-space storage service reached through a capability and
+/// an authenticated, post-quantum-hybrid session.
 fn vault_request() -> Result<(), &'static str> {
     let me = Identity::from_secret(&user::demo_identity::CHECK_SECRET);
     let vault = Identity::from_secret(&user::demo_identity::VAULT_SECRET).public();
@@ -200,38 +200,82 @@ fn vault_request() -> Result<(), &'static str> {
         "finishing the vault handshake",
     )?;
 
-    // Sealed request: the 16-byte name, then its tag.
-    let mut name = [0u8; 16];
-    name[..4].copy_from_slice(b"motd");
-    let tag = session.seal(&mut name).map_err(|_| "sealing the request")?;
-    let mut request = [0u8; 32];
-    request[..16].copy_from_slice(&name);
-    request[16..].copy_from_slice(&tag);
+    // Read the motd that the disk image ships with.
+    let (status, body, len) = vault_op(&mut session, OP_READ, b"motd", &[])?;
+    expect(status == 0, "the vault found motd")?;
     expect(
-        user::send_blob(TO_VAULT, &request).is_ok(),
+        len <= V_DATA && &body[..len] == b"The Keep holds. Rook stands watch.\n",
+        "the vault served the right bytes",
+    )?;
+
+    // Write a new file, read it back, then delete it — proving the store is
+    // read-write over the sealed channel, not just read-only.
+    let payload = b"written over a sealed channel";
+    let (status, _, _) = vault_op(&mut session, OP_WRITE, b"scratch", payload)?;
+    expect(status == 0, "the vault accepted a sealed write")?;
+
+    let (status, body, len) = vault_op(&mut session, OP_READ, b"scratch", &[])?;
+    expect(
+        status == 0 && len == payload.len() && &body[..len] == payload,
+        "the written file reads back byte for byte",
+    )?;
+
+    let (status, _, _) = vault_op(&mut session, OP_DELETE, b"scratch", &[])?;
+    expect(status == 0, "the vault deleted the file")?;
+
+    let (status, _, _) = vault_op(&mut session, OP_READ, b"scratch", &[])?;
+    expect(status != 0, "the deleted file is gone")?;
+    Ok(())
+}
+
+const OP_READ: u8 = 0;
+const OP_WRITE: u8 = 1;
+const OP_DELETE: u8 = 2;
+/// Sealed request/reply body sizes, matching the Vault task.
+const V_REQ_BODY: usize = 64;
+const V_REPLY_BODY: usize = 64;
+const V_NAME: usize = 16;
+const V_DATA: usize = V_REPLY_BODY - 2;
+
+/// Run one sealed Vault operation and return `(status, data, length)` from
+/// the reply. `status` is 0 on success.
+fn vault_op(
+    session: &mut drawbridge::Session,
+    op: u8,
+    name: &[u8],
+    data: &[u8],
+) -> Result<(u8, [u8; V_DATA], usize), &'static str> {
+    let mut req = [0u8; V_REQ_BODY];
+    req[0] = op;
+    req[1..1 + name.len()].copy_from_slice(name);
+    req[1 + V_NAME] = data.len() as u8;
+    req[2 + V_NAME..2 + V_NAME + data.len()].copy_from_slice(data);
+    let tag = session.seal(&mut req).map_err(|_| "sealing the request")?;
+    let mut framed = [0u8; V_REQ_BODY + 16];
+    framed[..V_REQ_BODY].copy_from_slice(&req);
+    framed[V_REQ_BODY..].copy_from_slice(&tag);
+    expect(
+        user::send_blob(TO_VAULT, &framed).is_ok(),
         "sending the sealed request",
     )?;
 
-    // Sealed reply: 64-byte body (status, length, data) then its tag.
-    let mut incoming = [0u8; 80];
+    let mut incoming = [0u8; V_REPLY_BODY + 16];
     expect(
         user::recv_blob(FROM_VAULT, &mut incoming).is_ok(),
         "the vault's sealed reply",
     )?;
-    let mut reply = [0u8; 64];
+    let mut reply = [0u8; V_REPLY_BODY];
     let mut rtag = [0u8; 16];
-    reply.copy_from_slice(&incoming[..64]);
-    rtag.copy_from_slice(&incoming[64..]);
+    reply.copy_from_slice(&incoming[..V_REPLY_BODY]);
+    rtag.copy_from_slice(&incoming[V_REPLY_BODY..]);
     session
         .open(&mut reply, &rtag)
         .map_err(|_| "opening the sealed reply")?;
-    expect(reply[0] == 0, "the vault found the file")?;
     let len = reply[1] as usize;
-    expect(
-        len <= 62 && &reply[2..2 + len] == b"The Keep holds. Rook stands watch.\n",
-        "the vault served the right bytes",
-    )?;
-    Ok(())
+    let n = core::cmp::min(len, V_DATA);
+    let mut body = [0u8; V_DATA];
+    body[..n].copy_from_slice(&reply[2..2 + n]);
+    Ok((reply[0], body, len))
 }
 
 /// The check task is the Drawbridge initiator. It sends the handshake over

@@ -211,19 +211,24 @@ model end to end: a **device driver and a filesystem running in ring 3**,
 reaching the disk only through a capability.
 
 - The `vault` crate is the filesystem: a superblock with a fixed
-  directory, files in contiguous extents, bump allocation. It rides on a
-  `BlockDevice` trait, so it is the same code on real hardware and over an
-  in-memory device in its 14 host tests. It treats the disk as untrusted —
-  a corrupt superblock or an out-of-range entry is refused, not followed.
+  directory, files in contiguous extents, bump allocation. It is
+  read-write — deleting a file reclaims its blocks by sliding the files
+  above the gap down into it, so the layout stays packed with no free list
+  to reason about. It rides on a `BlockDevice` trait, so it is the same
+  code on real hardware and over an in-memory device in its 20 host tests,
+  and it treats the disk as untrusted — a corrupt superblock or an
+  out-of-range entry is refused, not followed.
 - `user::ata` is a small PIO, polled, LBA28 ATA driver. It is a *user*
   program: it reaches the controller only through the Keep's I/O system
   calls, holding an I/O Writ for the primary bus's ports and nothing else.
 - The `vault` task puts the two together — it mounts the disk and serves
   files to other tasks **over a Drawbridge session**: a client opens the
   hybrid handshake, then every request and reply is sealed, so storage is
-  encrypted and authenticated end to end. At boot the Vault reports the
-  disk's geometry and files, and `check` reads one back over the sealed
-  channel.
+  encrypted and authenticated end to end. The sealed requests are read,
+  write and delete, so the store is read-write over the channel. At boot
+  the Vault reports the disk's geometry and files, and `check` reads the
+  shipped motd, then writes a file, reads it back and deletes it — all over
+  the sealed channel.
 
 So the only code that touches the disk hardware is a ring-3 task the Keep
 could end like any other; a bug there cannot corrupt the Keep, and the

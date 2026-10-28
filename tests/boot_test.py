@@ -46,7 +46,7 @@ CASES = [
             "[vault] disk 256 blocks, filesystem has 3 file(s), 252 blocks free",
             "[vault] motd: The Keep holds. Rook stands watch.",
             "[vault] drawbridge: secure channel open with the client",
-            "[check] vault: read motd over a sealed Drawbridge channel, verified",
+            "[check] vault: read, wrote and deleted a file over a sealed Drawbridge channel",
             "[check] all checks passed",
             "the ring-3 test program ran its checks and exited with 0",
             "[keep] user: ring 3 works",

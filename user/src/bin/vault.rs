@@ -30,6 +30,14 @@ const REPLY: u64 = 2;
 const REPLY_BODY: usize = 64;
 const REPLY_DATA: usize = REPLY_BODY - 2;
 
+/// The sealed request: an op byte, a 16-byte name, a length byte, then up
+/// to `REQ_DATA` bytes of file content (for a write).
+const REQ_BODY: usize = 64;
+const REQ_DATA: usize = REQ_BODY - 2 - NAME_LEN;
+const OP_READ: u8 = 0;
+const OP_WRITE: u8 = 1;
+const OP_DELETE: u8 = 2;
+
 user::program!(main);
 
 fn main(_: u64) -> ! {
@@ -94,8 +102,9 @@ fn disk_self_test(ata: &mut Ata) {
 /// Open a Drawbridge session with the client, then answer sealed file
 /// requests over it: every request and reply is encrypted and
 /// authenticated end to end, so even the bytes on the endpoints are
-/// confidential. A request is a sealed 16-byte name; a reply is a sealed
-/// `(status, length, data)`.
+/// confidential. A request is a sealed `(op, name, data)`; a reply is a
+/// sealed `(status, length, data)`. The ops are read, write and delete, so
+/// the store is read-write over the channel.
 fn serve(mut fs: Option<Vault<Ata>>) -> ! {
     let me = Identity::from_secret(&VAULT_SECRET);
     let client = Identity::from_secret(&CHECK_SECRET).public();
@@ -111,30 +120,43 @@ fn serve(mut fs: Option<Vault<Ata>>) -> ! {
     };
 
     loop {
-        let mut framed = [0u8; NAME_LEN + 16];
+        let mut framed = [0u8; REQ_BODY + 16];
         if user::recv_blob(REQUEST, &mut framed).is_err() {
             continue;
         }
-        let mut name = [0u8; NAME_LEN];
+        let mut req = [0u8; REQ_BODY];
         let mut tag = [0u8; 16];
-        name.copy_from_slice(&framed[..NAME_LEN]);
-        tag.copy_from_slice(&framed[NAME_LEN..]);
-        if session.open(&mut name, &tag).is_err() {
+        req.copy_from_slice(&framed[..REQ_BODY]);
+        tag.copy_from_slice(&framed[REQ_BODY..]);
+        if session.open(&mut req, &tag).is_err() {
             continue;
         }
 
-        let used = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        // Parse (op, name, data) out of the sealed request.
+        let op = req[0];
+        let name_len = req[1..1 + NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(NAME_LEN);
+        let name = &req[1..1 + name_len];
+        let data_len = core::cmp::min(req[1 + NAME_LEN] as usize, REQ_DATA);
+        let data = &req[2 + NAME_LEN..2 + NAME_LEN + data_len];
+
         let mut reply = [0u8; REPLY_BODY];
-        let mut body = [0u8; REPLY_DATA];
-        match fs
-            .as_mut()
-            .and_then(|v| v.read(&name[..used], &mut body).ok())
-        {
-            Some(len) if len <= REPLY_DATA => {
-                reply[0] = 0;
-                reply[1] = len as u8;
-                reply[2..2 + len].copy_from_slice(&body[..len]);
+        match (op, fs.as_mut()) {
+            (OP_READ, Some(v)) => {
+                let mut body = [0u8; REPLY_DATA];
+                match v.read(name, &mut body) {
+                    Ok(len) if len <= REPLY_DATA => {
+                        reply[0] = 0;
+                        reply[1] = len as u8;
+                        reply[2..2 + len].copy_from_slice(&body[..len]);
+                    }
+                    _ => reply[0] = 1,
+                }
             }
+            (OP_WRITE, Some(v)) => reply[0] = u8::from(v.write(name, data).is_err()),
+            (OP_DELETE, Some(v)) => reply[0] = u8::from(v.delete(name).is_err()),
             _ => reply[0] = 1,
         }
         let Ok(rtag) = session.seal(&mut reply) else {
