@@ -431,20 +431,28 @@ pub fn spawn_user(name: &'static str, program: &Program, arg: u64, caps: &[Writ]
 }
 
 /// Restart the user task in `slot`: give it a fresh run of its program at
-/// `entry` with a new stack and `arg`, re-granting `caps`, while keeping its
-/// existing address space (whose memory the caller has already reloaded).
-/// Returns false if the slot is empty. The task must not be running, and
-/// its memory must be reloaded first, or it resumes in whatever state the
-/// crash left behind.
-pub fn restart(slot: usize, entry: u64, stack_top: u64, arg: u64, caps: &[Writ]) -> bool {
+/// `entry` with a new stack and `arg`, while keeping its existing address
+/// space (whose memory the caller has already reloaded) *and* the Writs it
+/// held — a healed task resumes its role with the same authority, so a
+/// restarted driver keeps its I/O Writ. Returns false if the slot is empty.
+/// The task must not be running, and its memory must be reloaded first, or
+/// it resumes in whatever state the crash left behind.
+pub fn restart(slot: usize, entry: u64, stack_top: u64, arg: u64) -> bool {
     SCHEDULER
         .with(|s| {
-            let (name, root) = {
-                let task = s.task(slot)?;
-                (task.name, task.space_root)
-            };
             let context = Context::reenter_user(slot, entry, stack_top, arg)?;
-            place(s, slot, name, root, context, caps);
+            let task = s.task(slot)?;
+            *task = Task {
+                name: task.name,
+                state: State::Ready,
+                space_root: task.space_root,
+                context: Some(context),
+                caps: task.caps, // keep the authority the task already held
+                badge_out: 0,
+                wait_next: None,
+                outcome: None,
+                ticks: 0,
+            };
             Some(())
         })
         .flatten()

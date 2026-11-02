@@ -235,7 +235,7 @@ fn restart(handle: u64, arg: u64) -> u64 {
     if crate::user::reload(&space, image).is_err() {
         return Error::BadArgument.to_raw();
     }
-    if sched::restart(slot, entry, stack_top, arg, &[]) {
+    if sched::restart(slot, entry, stack_top, arg) {
         0
     } else {
         Error::BadArgument.to_raw()

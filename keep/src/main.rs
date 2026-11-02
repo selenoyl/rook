@@ -640,7 +640,7 @@ fn run_restart_test(check: &user::Program, tick_counts: u32) -> ! {
                     arch::qemu::exit(arch::qemu::EXIT_FAILURE);
                 }
                 let arg = abi::check::RESTART | (generation << 8);
-                if !sched::restart(slot, check.entry, check.stack_top, arg, &[]) {
+                if !sched::restart(slot, check.entry, check.stack_top, arg) {
                     kprintln!("[keep] restart: could not restart the task");
                     arch::qemu::exit(arch::qemu::EXIT_FAILURE);
                 }
