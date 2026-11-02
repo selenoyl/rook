@@ -196,6 +196,15 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         run_supervise_test(&booted.check, &booted.michael, tick_counts);
     }
 
+    // Live update (test=update): swap the running ward from its A image to a
+    // second one loaded at boot (A/B), with nothing allocated after boot.
+    // The Keep triggers it here; Raphael gates it behind a Great Seal next.
+    if boot.value("test") == Some("update")
+        && let Some(ward_b) = booted.ward_b.as_ref()
+    {
+        run_update_test(&booted.check, ward_b, tick_counts);
+    }
+
     // Everything else runs under the scheduler. Michael comes first, with
     // Writs to hear from and reply to the task he watches.
     let michael = spawn_user(
@@ -351,6 +360,10 @@ struct Booted {
     check: user::Program,
     vault: user::Program,
     gabriel: user::Program,
+    /// A second address space holding the ward's image, loaded at boot only
+    /// for the live-update demo: the "B" slot an update swaps the ward into,
+    /// since nothing can be allocated once the frame allocator is sealed.
+    ward_b: Option<user::Program>,
 }
 
 /// Replace the boot page tables with the Keep's own, load the user
@@ -395,6 +408,11 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
     let check = load_program("check", programs::CHECK, &kernel.space, &mut frames);
     let vault = load_program("vault", programs::VAULT, &kernel.space, &mut frames);
     let gabriel = load_program("gabriel", programs::GABRIEL, &kernel.space, &mut frames);
+    // For the live-update demo, load a second copy of the ward's image into
+    // its own address space now, while the allocator is still open; the
+    // update swaps the running ward into it.
+    let ward_b = (boot.value("test") == Some("update"))
+        .then(|| load_program("check", programs::CHECK, &kernel.space, &mut frames));
 
     frames.seal();
     kprintln!(
@@ -415,6 +433,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
         check,
         vault,
         gabriel,
+        ward_b,
     }
 }
 
@@ -702,6 +721,51 @@ fn run_supervise_test(check: &user::Program, michael: &user::Program, tick_count
         }
         _ => {
             kprintln!("[keep] supervise: the supervisor could not heal the angel; stopping");
+            arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+        }
+    }
+}
+
+/// Live update, the A/B swap: the ward runs its A image (version 1); the
+/// Keep then re-images it into a second address space loaded at boot (B,
+/// version 2), allocating nothing. The ward comes up on the new image and
+/// exits cleanly. This is the mechanism; Raphael gates it behind a verified
+/// Great Seal next.
+fn run_update_test(ward_a: &user::Program, ward_b: &user::Program, tick_counts: u32) -> ! {
+    let ward = spawn_user("check", ward_a, abi::check::WARD | (1 << 8), &[]);
+    arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
+    kprintln!("[keep] sched: timer on, {TICKS_PER_SECOND} ticks a second");
+
+    // Let version 1 announce itself and stand by, then swap in the B image.
+    let start = sched::now();
+    while sched::now() < start + 30 {
+        arch::cpu::wait_for_interrupt();
+    }
+    kprintln!("[keep] update: re-imaging the ward into its B address space (version 2)");
+    if !sched::reimage(
+        ward,
+        ward_b.space.root(),
+        ward_b.entry,
+        ward_b.stack_top,
+        abi::check::WARD | (2 << 8),
+    ) {
+        kprintln!("[keep] update: could not re-image the ward; stopping");
+        arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+    }
+
+    let outcome = loop {
+        arch::cpu::wait_for_interrupt();
+        if let Some(outcome) = sched::outcome(ward) {
+            break outcome;
+        }
+    };
+    match outcome {
+        Outcome::Exited(0) => {
+            kprintln!("[keep] update: the ward runs its updated image; the A/B swap holds");
+            arch::qemu::exit(arch::qemu::EXIT_SUCCESS);
+        }
+        _ => {
+            kprintln!("[keep] update: the ward did not come up on its new image; stopping");
             arch::qemu::exit(arch::qemu::EXIT_FAILURE);
         }
     }

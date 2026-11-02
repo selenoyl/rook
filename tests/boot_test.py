@@ -100,6 +100,17 @@ CASES = [
         ],
     ),
     (
+        "a running task is live-updated by swapping it into a second address space (A/B)",
+        "selftest test=update",
+        PASSED,
+        [
+            "[check] ward: version 1 running",
+            "[check] ward: version 2 running",
+            "[check] ward: the verified update is live",
+            "[keep] update: the ward runs its updated image; the A/B swap holds",
+        ],
+    ),
+    (
         "reading the null page faults and fails closed",
         "selftest test=null",
         STOPPED,

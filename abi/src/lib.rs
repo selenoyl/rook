@@ -145,6 +145,10 @@ pub mod check {
     /// generation 0. The generation rides in the argument above the low
     /// byte (`RESTART | generation << 8`).
     pub const RESTART: u64 = 2;
+    /// The ward of a live-update demo: log its version (carried above the
+    /// low byte, `WARD | version << 8`) and, at version 1, wait to be
+    /// updated; at version 2 and up — the image swapped in — exit cleanly.
+    pub const WARD: u64 = 3;
 }
 
 /// Roles for `michael`, the supervisor, chosen with the task's start

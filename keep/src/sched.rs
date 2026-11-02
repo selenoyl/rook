@@ -440,23 +440,52 @@ pub fn spawn_user(name: &'static str, program: &Program, arg: u64, caps: &[Writ]
 pub fn restart(slot: usize, entry: u64, stack_top: u64, arg: u64) -> bool {
     SCHEDULER
         .with(|s| {
-            let context = Context::reenter_user(slot, entry, stack_top, arg)?;
-            let task = s.task(slot)?;
-            *task = Task {
-                name: task.name,
-                state: State::Ready,
-                space_root: task.space_root,
-                context: Some(context),
-                caps: task.caps, // keep the authority the task already held
-                badge_out: 0,
-                wait_next: None,
-                outcome: None,
-                ticks: 0,
-            };
-            Some(())
+            let root = s.task(slot)?.space_root;
+            reset_task(s, slot, root, entry, stack_top, arg)
         })
         .flatten()
         .is_some()
+}
+
+/// Re-image the task in `slot`: switch it to a different address space —
+/// `space_root`, another image of the program already built and loaded at
+/// boot — and start it afresh at `entry` on a new stack with `arg`, keeping
+/// its Writs. This is the A/B swap behind a live update: the old image's
+/// space is left intact, so the task could be switched back to it. The task
+/// must not be running (it may be ready, sleeping or ended).
+pub fn reimage(slot: usize, space_root: u64, entry: u64, stack_top: u64, arg: u64) -> bool {
+    SCHEDULER
+        .with(|s| reset_task(s, slot, space_root, entry, stack_top, arg))
+        .flatten()
+        .is_some()
+}
+
+/// Reset task `slot` to a fresh start at `entry` in the address space
+/// `root`, on a new stack with `arg`, keeping the name and Writs it had. A
+/// restart keeps its own space; an A/B update points it at another. The
+/// caller holds the scheduler lock.
+fn reset_task(
+    s: &mut Scheduler,
+    slot: usize,
+    root: u64,
+    entry: u64,
+    stack_top: u64,
+    arg: u64,
+) -> Option<()> {
+    let context = Context::reenter_user(slot, entry, stack_top, arg)?;
+    let task = s.task(slot)?;
+    *task = Task {
+        name: task.name,
+        state: State::Ready,
+        space_root: root,
+        context: Some(context),
+        caps: task.caps, // keep the authority the task already held
+        badge_out: 0,
+        wait_next: None,
+        outcome: None,
+        ticks: 0,
+    };
+    Some(())
 }
 
 /// Place a Writ in task `slot`'s capability table at `handle`. The Keep

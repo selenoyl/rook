@@ -40,6 +40,7 @@ fn main(arg: u64) -> ! {
             user::sys::crash();
         }
         check::RESTART => restart_demo(arg >> 8),
+        check::WARD => ward_demo(arg >> 8),
         _ => {}
     }
     match run_checks() {
@@ -75,6 +76,25 @@ fn restart_demo(generation: u64) -> ! {
     }
     let _ = user::log("restart: the reloaded task runs with fresh memory");
     user::exit(0)
+}
+
+/// The ward of the live-update demo. Version 1 announces itself and waits
+/// to be updated; when Raphael swaps in the new image the Keep re-enters
+/// this program at a higher version, which announces the update is live and
+/// exits. Both versions are this same program — the honest simplification
+/// is that the "new" image differs only by the version in its argument; a
+/// real update would carry different code into the B address space.
+fn ward_demo(version: u64) -> ! {
+    user::logln!("ward: version {version} running");
+    if version >= 2 {
+        let _ = user::log("ward: the verified update is live");
+        user::exit(0);
+    }
+    // Version 1: stand by in its own address space until the update lands.
+    let _ = user::log("ward: standing by for a verified update");
+    loop {
+        let _ = user::sleep(50);
+    }
 }
 
 fn expect(ok: bool, name: &'static str) -> Result<(), &'static str> {
