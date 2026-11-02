@@ -108,7 +108,8 @@ and headless QEMU boot tests.
   The supervisor drives this through a capability: a **Restart Writ** lets
   Michael, from ring 3, heal a specific fallen angel and no other; a boot
   test crashes an angel, has Michael restart it, and watches it recover.
-  Raphael will use the same mechanism to swap in a verified update.
+  **Raphael** uses the same machinery for verified live updates — an A/B
+  address-space swap, applied only once an update's Great Seal checks.
 - **Hands out randomness.** A ChaCha20 CSPRNG, seeded at boot from the
   CPU's hardware generator (RDSEED, else RDRAND), backs a `random` system
   call. It rekeys on every draw, so earlier output can't be recovered from
@@ -372,6 +373,30 @@ carries them as *parcels* — kind ‖ total ‖ offset ‖ fragment — reassem
 on the far side; Courier packets fit one datagram each. The two-node
 exchange runs under `tests/net_test.py`, part of `make test`.
 
+## Raphael: verified live updates (`user/src/bin/raphael.rs`)
+
+Raphael is the healer: the angel that applies software updates, but only
+ones the **Round Table** signed. He takes an update's Great Seal — `k` of
+`n` seats, each a hybrid Ed25519 + SLH-DSA signature over the image manifest
+— and verifies it with the `seal` crate, in ring 3. A tampered seal is
+refused before anything is applied; the whole point is that no code runs
+unless enough of the Table approved it.
+
+Applying it is an **A/B swap**. Because the Keep allocates nothing after
+boot, a second image of the ward is loaded into its own address space while
+the allocator is still open. Raphael holds an **Update Writ** — the right to
+swap one task into that second space, and the recipe to do it — and uses it
+only once the seal verifies; the Keep then re-images the ward (the same safe
+reset as a restart, pointed at the new space). The ward comes up on its new
+image. Because the old image's space is untouched, the swap could be undone.
+
+The demo (`test=update`) is honest about its edges, and the code says so:
+the Round Table and the signed manifest are built on the spot rather than
+arriving from offline seats over the network, and the manifest's hash is a
+stand-in rather than the hash of the bytes in the B image. What is real is
+the verification and the swap: the seat signatures must check, a tampered
+seal is refused, and the task genuinely changes address space.
+
 ## Build, run, test
 
 You need rustup (the pinned toolchain in `rust-toolchain.toml` installs
@@ -425,7 +450,7 @@ addresses; the loader parses no ELF at all.
 | `keep/src/trap.rs` | What to do on each CPU exception |
 | `keep/src/banner.rs` | The boot screen |
 | `abi/` | The system-call interface (call numbers, errors, message and status encodings), shared by the Keep and the user programs |
-| `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, `vault` the storage service, and `gabriel` the messenger; `user/src/ata.rs` and `user/src/ne2000.rs` are the ring-3 ATA and NE2000 drivers. `user/src/sys.rs` is the other place `unsafe` is allowed |
+| `user/` | Rook's user programs: Michael the supervisor, `check` the ring-3 test program, `vault` the storage service, `gabriel` the messenger, and `raphael` the healer; `user/src/ata.rs` and `user/src/ne2000.rs` are the ring-3 ATA and NE2000 drivers. `user/src/sys.rs` is the other place `unsafe` is allowed |
 | `crypto/` | Rook's cryptography, from the specs: SHA-2, SHA-3/SHAKE, HMAC, HKDF, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA, verified against the official vectors. No `unsafe`, no external crates |
 | `drawbridge/` | Rook's authenticated, encrypted session protocol: a SIGMA-style handshake and a sealed data channel, built on `crypto`. No `unsafe` |
 | `seal/` | The Great Seal: the Round Table policy and k-of-n Ed25519 + SLH-DSA signatures over software updates, built on `crypto`. No `unsafe` |
@@ -461,17 +486,18 @@ The Keep's privileged core is in place; the crypto foundation, the
 Drawbridge handshake and a ring-3 storage service are down. What's left
 builds on top:
 
-1. **Raphael and live updates**: the Great Seal's signing and verification
-   are done (`seal/`); what remains is the healer angel that uses them —
-   verifying a sealed image, swapping A/B slots, persisting the monotonic
-   version counter, and rolling back a build that never checks in. The
-   hybrid identity (Ed25519 + ML-DSA-87) and hybrid key exchange
-   (X25519 + ML-KEM-1024) are already in place.
+1. **Raphael's updates, carried further**: Raphael already verifies an
+   update's Great Seal and applies it with an A/B swap. What remains is to
+   carry a genuinely different image over Courier into the B slot and bind
+   the manifest's hash to those received bytes, then persist the monotonic
+   version counter across boots and roll back a build that never checks in.
 2. **A fuller Vault**: larger files, chunked over the sealed channel (today
    a file is read or written in one 62-byte sealed message). Read, write,
    delete and freed-space reclamation already work.
 3. Boot under GRUB on real hardware (x2APIC and a PIT-less timer source are
    still to do).
 
-The supervisor already heals a fallen angel through a Restart Writ, and the
-wire parsers and Courier are fuzzed against random and corrupted input.
+Self-healing is in both forms — the Keep reloads a crashed task in place and
+Michael restarts a fallen angel through a Restart Writ — the supervisor
+applies verified updates through Raphael, and the wire parsers and Courier
+are fuzzed against random and corrupted input.
