@@ -159,3 +159,86 @@ fn a_full_exchange_settles_quiet() {
         "both ends quiet once everything is acked"
     );
 }
+
+// --- Fuzzing: on_packet takes bytes straight off the wire, so it must
+// authenticate and parse any input without panicking, and never deliver
+// bytes that failed their tag. A hand-rolled PRNG keeps it dependency-free
+// and deterministic.
+
+/// A tiny xorshift64 PRNG: deterministic, no dependencies.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        Rng(seed)
+    }
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn byte(&mut self) -> u8 {
+        self.next() as u8
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+#[test]
+fn on_packet_survives_arbitrary_bytes() {
+    let mut rng = Rng::new(0xA5A5_1234_DEAD_0001);
+    let (mut a, mut b) = pair();
+    // Sometimes longer than a real packet, to exercise the length bound.
+    let mut buf = [0u8; MAX_PACKET + 64];
+    for _ in 0..200_000 {
+        let len = rng.below(buf.len() + 1);
+        for x in &mut buf[..len] {
+            *x = rng.byte();
+        }
+        // Must return Ok or Err, never panic. Random bytes almost never
+        // authenticate, so this mostly drives the reject path.
+        let _ = b.on_packet(&buf[..len]);
+    }
+    // Nothing forged was ever delivered, and the end still works: a real
+    // packet from its peer afterwards is delivered in full.
+    assert!(deliver_all(&mut b).is_empty());
+    a.send(0, b"still works").unwrap();
+    feed(&mut b, &transmit_all(&mut a));
+    assert_eq!(deliver_all(&mut b), vec![(0, b"still works".to_vec())]);
+}
+
+#[test]
+fn mutated_packets_never_panic_and_corruption_is_refused() {
+    let mut rng = Rng::new(0x1357_9BDF_2468_ACE0);
+    for _ in 0..50_000 {
+        let (mut a, mut b) = pair();
+        let n = rng.below(MAX_MSG + 1);
+        let mut msg = [0u8; MAX_MSG];
+        for x in &mut msg[..n] {
+            *x = rng.byte();
+        }
+        let stream = rng.below(MAX_STREAMS) as u8;
+        a.send(stream, &msg[..n]).unwrap();
+        for mut pkt in transmit_all(&mut a) {
+            for _ in 0..rng.below(5) {
+                if pkt.is_empty() {
+                    break;
+                }
+                let pos = rng.below(pkt.len());
+                pkt[pos] ^= 1u8 << rng.below(8);
+            }
+            // Feeding a flipped (or untouched) packet must never panic.
+            let _ = b.on_packet(&pkt);
+        }
+        // Integrity: anything delivered is the exact message under its tag;
+        // a corrupted packet authenticates to nothing and delivers nothing.
+        for (got_stream, got) in deliver_all(&mut b) {
+            assert_eq!(got_stream, stream);
+            assert_eq!(&got, &msg[..n]);
+        }
+    }
+}
