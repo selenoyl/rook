@@ -467,8 +467,9 @@ builds on top:
    version counter, and rolling back a build that never checks in. The
    hybrid identity (Ed25519 + ML-DSA-87) and hybrid key exchange
    (X25519 + ML-KEM-1024) are already in place.
-2. **A fuller Vault**: freed-space reclamation and larger files, building
-   on the read-write-delete already carried over the sealed channel.
+2. **A fuller Vault**: larger files, chunked over the sealed channel (today
+   a file is read or written in one 62-byte sealed message). Read, write,
+   delete and freed-space reclamation already work.
 3. Boot under GRUB on real hardware (x2APIC and a PIT-less timer source are
    still to do).
 
