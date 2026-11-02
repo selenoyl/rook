@@ -87,6 +87,19 @@ CASES = [
         ],
     ),
     (
+        "a fallen angel is restarted by the supervisor through a capability",
+        "selftest test=supervise",
+        PASSED,
+        [
+            "[check] restart: generation 0, data mark 0x1234",
+            "[michael] supervisor, watching over an angel to heal it",
+            "[michael] an angel has fallen; restarting it (restart 1)",
+            "[check] restart: generation 1, data mark 0x1234",
+            "[michael] the angel recovered and exited with 0",
+            "[keep] supervise: Michael healed the fallen angel; Rook stands watch over itself",
+        ],
+    ),
+    (
         "reading the null page faults and fails closed",
         "selftest test=null",
         STOPPED,

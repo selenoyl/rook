@@ -112,6 +112,13 @@ pub fn watch(handle: u64) -> Result<u64, Refused> {
     abi::result(sys::call(call::WATCH, [handle, 0, 0, 0]))
 }
 
+/// Restart the task a Restart Writ at `handle` names, handing it `arg` for
+/// its fresh run. The Keep reloads its image and resets it. Refused without
+/// the Writ, or if the target has not ended.
+pub fn restart(handle: u64, arg: u64) -> Result<(), Refused> {
+    abi::result(sys::call(call::RESTART, [handle, arg, 0, 0])).map(|_| ())
+}
+
 /// Read one byte from a device register through an I/O Writ.
 pub fn io_in(handle: u64, port: u16) -> Result<u8, Refused> {
     abi::result(sys::call(call::IO_IN, [handle, u64::from(port), 0, 0])).map(|v| v as u8)

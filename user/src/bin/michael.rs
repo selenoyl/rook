@@ -14,7 +14,7 @@
 #![forbid(unsafe_code)]
 
 use drawbridge::{Identity, MSG1_LEN, MSG3_LEN, Responder, ResponderDone};
-use user::abi::status;
+use user::abi::{check, michael, status};
 use user::demo_identity::{CHECK_SECRET, ephemeral};
 
 const REQUEST: u64 = 0;
@@ -26,7 +26,10 @@ const ROUND: u64 = 50;
 
 user::program!(main);
 
-fn main(_: u64) -> ! {
+fn main(arg: u64) -> ! {
+    if arg == michael::HEAL {
+        heal_ward();
+    }
     let _ = user::log("supervisor, standing watch");
 
     // Open a secure channel with the ward: a Drawbridge handshake and a
@@ -54,6 +57,38 @@ fn main(_: u64) -> ! {
 
     loop {
         let _ = user::sleep(ROUND * 20);
+    }
+}
+
+/// Heal mode: watch a ward through a Task Writ and, when it falls, restart
+/// it through a Restart Writ until it comes back. The Keep grants handle 0
+/// to watch the ward and handle 1 to restart it. Exits 0 once the ward has
+/// recovered — the supervisor healed a fallen angel.
+fn heal_ward() -> ! {
+    const WARD: u64 = 0;
+    const RESTART: u64 = 1;
+    let _ = user::log("supervisor, watching over an angel to heal it");
+    let mut restarts: u64 = 0;
+    loop {
+        match user::watch(WARD) {
+            Ok(s) if status::kind(s) == status::FAULTED => {
+                restarts = restarts.saturating_add(1);
+                user::logln!("an angel has fallen; restarting it (restart {restarts})");
+                // Bring it up a generation on, so it starts healed.
+                if user::restart(RESTART, check::RESTART | (restarts << 8)).is_err() {
+                    let _ = user::log("could not restart the angel");
+                    user::exit(1);
+                }
+            }
+            Ok(s) if status::kind(s) == status::EXITED => {
+                user::logln!("the angel recovered and exited with {}", status::code(s));
+                let _ = user::log("michael: a fallen angel was restarted and stands again");
+                user::exit(0);
+            }
+            _ => {
+                let _ = user::sleep(ROUND);
+            }
+        }
     }
 }
 

@@ -184,6 +184,12 @@ fn run_checks() -> Result<(), &'static str> {
         refused(user::io_out(ABSENT_HANDLE, 0x1f7, 0), Error::BadCapability),
         "writing a device port without an I/O Writ is refused",
     )?;
+    // Restarting a task is the supervisor's power alone: without a Restart
+    // Writ it is refused, so no task can heal (or disturb) another at will.
+    expect(
+        refused(user::restart(ABSENT_HANDLE, 0), Error::BadCapability),
+        "restart without a Restart Writ is refused",
+    )?;
 
     // Message passing, for real: run a Drawbridge handshake with the
     // supervisor over the two endpoints, then trade a sealed message.

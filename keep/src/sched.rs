@@ -68,6 +68,18 @@ pub enum Writ {
     },
     /// The right to ask after another task (watch it).
     Task { slot: usize },
+    /// The right to restart task `slot` — the supervisor's authority to
+    /// heal a fallen angel. The Writ also carries the recipe the Keep needs
+    /// to reload it: its entry, stack top, address-space root and image. A
+    /// holder can restart only this one task, and only the Keep ever reads
+    /// these fields; the holder passes the Writ by handle, not by value.
+    Restart {
+        slot: usize,
+        entry: u64,
+        stack_top: u64,
+        space_root: u64,
+        image: &'static [u8],
+    },
     /// The right to drive a device: I/O ports `[base, base + count)`. The
     /// Keep's microkernel keeps drivers in ring 3, so a driver task holds
     /// one of these for exactly its device's registers and nothing else.
@@ -525,6 +537,28 @@ pub fn io_allows(handle: u64, port: u16) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// The restart recipe named by a Restart Writ the running task holds at
+/// `handle`: the target slot, and what the Keep needs to reload it. None if
+/// the handle holds no Restart Writ, so the syscall can refuse.
+#[allow(clippy::type_complexity)]
+pub fn restart_recipe(handle: u64) -> Option<(usize, u64, u64, u64, &'static [u8])> {
+    SCHEDULER
+        .with(|s| {
+            let cur = s.current;
+            match s.cap(cur, handle) {
+                Some(Writ::Restart {
+                    slot,
+                    entry,
+                    stack_top,
+                    space_root,
+                    image,
+                }) => Some((slot, entry, stack_top, space_root, image)),
+                _ => None,
+            }
+        })
+        .flatten()
 }
 
 /// End the running user task, which faulted, and run the next task. The

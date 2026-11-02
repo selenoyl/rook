@@ -189,6 +189,13 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         run_restart_test(&booted.check, tick_counts);
     }
 
+    // Supervised healing (test=supervise): Michael watches a crashing angel
+    // and, through a Restart Writ, brings it back — the capability-gated
+    // form of self-healing, driven by the supervisor rather than the Keep.
+    if boot.value("test") == Some("supervise") {
+        run_supervise_test(&booted.check, &booted.michael, tick_counts);
+    }
+
     // Everything else runs under the scheduler. Michael comes first, with
     // Writs to hear from and reply to the task he watches.
     let michael = spawn_user(
@@ -628,7 +635,7 @@ fn run_restart_test(check: &user::Program, tick_counts: u32) -> ! {
                 kprintln!(
                     "[keep] restart: task {slot} (check) crashed; reloading its image and restarting it (generation {generation})"
                 );
-                if let Err(e) = user::reload(check, programs::CHECK) {
+                if let Err(e) = user::reload(&check.space, programs::CHECK) {
                     kprintln!("[keep] restart: could not reload the task: {e}");
                     arch::qemu::exit(arch::qemu::EXIT_FAILURE);
                 }
@@ -648,6 +655,54 @@ fn run_restart_test(check: &user::Program, tick_counts: u32) -> ! {
                 kprintln!("[keep] restart: the task did not recover; stopping");
                 arch::qemu::exit(arch::qemu::EXIT_FAILURE);
             }
+        }
+    }
+}
+
+/// Supervised self-healing: Michael, in heal mode, watches a flaky angel
+/// and restarts it through a Restart Writ when it falls. The Keep spawns
+/// both, then waits for Michael, who exits cleanly once the angel is back.
+/// This proves the supervisor — not only the Keep — can heal a fallen task.
+fn run_supervise_test(check: &user::Program, michael: &user::Program, tick_counts: u32) -> ! {
+    // The flaky angel: the check program in RESTART mode, which crashes on
+    // generation 0 and recovers once restarted a generation on.
+    let angel = spawn_user("check", check, abi::check::RESTART, &[]);
+    // Michael holds a Task Writ to watch the angel and a Restart Writ that
+    // carries the recipe to reload it — and nothing else.
+    let supervisor = spawn_user(
+        "michael",
+        michael,
+        abi::michael::HEAL,
+        &[
+            Writ::Task { slot: angel },
+            Writ::Restart {
+                slot: angel,
+                entry: check.entry,
+                stack_top: check.stack_top,
+                space_root: check.space.root(),
+                image: programs::CHECK,
+            },
+        ],
+    );
+    arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
+    kprintln!("[keep] sched: timer on, {TICKS_PER_SECOND} ticks a second");
+
+    let outcome = loop {
+        arch::cpu::wait_for_interrupt();
+        if let Some(outcome) = sched::outcome(supervisor) {
+            break outcome;
+        }
+    };
+    match outcome {
+        Outcome::Exited(0) => {
+            kprintln!(
+                "[keep] supervise: Michael healed the fallen angel; Rook stands watch over itself"
+            );
+            arch::qemu::exit(arch::qemu::EXIT_SUCCESS);
+        }
+        _ => {
+            kprintln!("[keep] supervise: the supervisor could not heal the angel; stopping");
+            arch::qemu::exit(arch::qemu::EXIT_FAILURE);
         }
     }
 }

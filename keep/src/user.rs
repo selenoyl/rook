@@ -237,25 +237,19 @@ pub fn load(
     })
 }
 
-/// Reload `elf` into a program's existing address space: re-copy every
-/// loadable segment and re-zero the stack, reusing the frames already
-/// mapped. It allocates nothing, so the Keep can heal a crashed task after
-/// the frame allocator is sealed. `program` must be the one first loaded
-/// from this same `elf`, and its task must not be running.
-pub fn reload(program: &Program, elf: &[u8]) -> Result<(), LoadError> {
+/// Reload `elf` into an existing address space: re-copy every loadable
+/// segment and re-zero the stack, reusing the frames already mapped. It
+/// allocates nothing, so the Keep can heal a crashed task after the frame
+/// allocator is sealed. `space` must be the one first loaded from this same
+/// `elf`, and its task must not be running.
+pub fn reload(space: &AddressSpace, elf: &[u8]) -> Result<(), LoadError> {
     let header = parse_header(elf)?;
     walk_segments(elf, &header, |virt, _flags, data| {
-        program
-            .space
-            .fill_mapped(virt, data)
-            .map_err(LoadError::Map)
+        space.fill_mapped(virt, data).map_err(LoadError::Map)
     })?;
     let mut virt = user_stack_base();
     while virt < USER_STACK_TOP {
-        program
-            .space
-            .fill_mapped(virt, &[])
-            .map_err(LoadError::Map)?;
+        space.fill_mapped(virt, &[]).map_err(LoadError::Map)?;
         virt = virt.checked_add(PAGE_SIZE).ok_or(LoadError::Truncated)?;
     }
     Ok(())

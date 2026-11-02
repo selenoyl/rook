@@ -215,6 +215,13 @@ impl AddressSpace {
         self.root
     }
 
+    /// A view of an address space over its existing top-level table, to
+    /// reach a task's memory (for a reload) without holding its `Program`.
+    /// It owns nothing: the tables belong to whatever built them.
+    pub fn from_root(root: u64) -> AddressSpace {
+        AddressSpace { root }
+    }
+
     /// A read-only view of the address space now loaded (from CR3), for
     /// checking a running task's own mappings. It owns nothing: the tables
     /// belong to whatever built them.

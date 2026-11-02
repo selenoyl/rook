@@ -69,6 +69,10 @@ pub fn handle(frame: SyscallFrame) -> Context {
             frame.set_result(random(args[0], args[1]));
             frame.context()
         }
+        call::RESTART => {
+            frame.set_result(restart(args[0], args[1]));
+            frame.context()
+        }
         _ => {
             frame.set_result(Error::NoSuchCall.to_raw());
             frame.context()
@@ -212,4 +216,28 @@ fn random(address: u64, length: u64) -> u64 {
     crate::random::fill(slice);
     cpu::copy_to_user(address, slice);
     0
+}
+
+/// RESTART: heal the task a Restart Writ at `handle` names. The Keep
+/// reloads its image into the frames it already holds — allocating nothing
+/// — and gives it a fresh start with `arg`. Refused unless the caller holds
+/// the Writ and the target has actually ended, so a live task cannot be
+/// reset out from under itself.
+fn restart(handle: u64, arg: u64) -> u64 {
+    let Some((slot, entry, stack_top, space_root, image)) = sched::restart_recipe(handle) else {
+        return Error::BadCapability.to_raw();
+    };
+    if sched::outcome(slot).is_none() {
+        // Still alive (or no such task): refuse rather than disturb it.
+        return Error::BadArgument.to_raw();
+    }
+    let space = AddressSpace::from_root(space_root);
+    if crate::user::reload(&space, image).is_err() {
+        return Error::BadArgument.to_raw();
+    }
+    if sched::restart(slot, entry, stack_top, arg, &[]) {
+        0
+    } else {
+        Error::BadArgument.to_raw()
+    }
 }

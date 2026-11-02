@@ -57,6 +57,10 @@ pub mod call {
     /// Fill a buffer with cryptographically-random bytes: `(address,
     /// length)`. Needs no Writ; randomness is safe for any task to ask for.
     pub const RANDOM: u64 = 12;
+    /// RESTART(handle, arg): heal the task a Restart Writ at `handle` names,
+    /// reloading its image and restarting it with `arg`. Needs that Writ,
+    /// and the target must have ended.
+    pub const RESTART: u64 = 13;
 }
 
 /// The most bytes one `RANDOM` call fills, bounding the Keep's buffer.
@@ -141,6 +145,16 @@ pub mod check {
     /// generation 0. The generation rides in the argument above the low
     /// byte (`RESTART | generation << 8`).
     pub const RESTART: u64 = 2;
+}
+
+/// Roles for `michael`, the supervisor, chosen with the task's start
+/// argument.
+pub mod michael {
+    /// Watch the ward over a Drawbridge session and report how it ends.
+    pub const WATCH: u64 = 0;
+    /// Heal mode: watch a ward and, when it falls, restart it through a
+    /// Restart Writ until it recovers.
+    pub const HEAL: u64 = 1;
 }
 
 /// Roles for `gabriel`, the network messenger, chosen with the task's
