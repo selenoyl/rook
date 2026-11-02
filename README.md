@@ -99,6 +99,14 @@ and headless QEMU boot tests.
   the Keep carries on; only a fault in the Keep's own code stops the
   machine. The log names the faulting address, whether it hit a stack
   guard, and which task was running.
+- **Heals a crashed task.** The Keep can reload a fallen task's program
+  into its *existing* frames and restart it in place, allocating nothing
+  after boot: it re-applies the ELF (re-copying every segment, re-zeroing
+  the stack) and gives the slot a fresh start. A boot test crashes a task,
+  reloads and restarts it, and the next run finds its memory
+  re-initialised — proof the image was reloaded, not merely re-entered.
+  This is the mechanism Michael will drive to restart a fallen angel, and
+  Raphael to swap in a verified update.
 - **Hands out randomness.** A ChaCha20 CSPRNG, seeded at boot from the
   CPU's hardware generator (RDSEED, else RDRAND), backs a `random` system
   call. It rekeys on every draw, so earlier output can't be recovered from
@@ -460,8 +468,9 @@ builds on top:
 2. **A fuller Vault**: writes and deletion from a client over the sealed
    channel, and freed-space reclamation, so the disk is read-write, not
    just read-mostly.
-3. The angels as real tasks (Michael spawning, watching and restarting
-   the others, then Gabriel and Raphael), which also needs runtime task
-   spawn and reclaiming an exited task's slot.
-4. Fuzz the parsers, and boot under GRUB on real hardware (x2APIC and a
-   PIT-less timer source are still to do).
+3. Michael driving the restart: the Keep can already reload and restart a
+   crashed task in place; next is a capability (a Task Writ) that lets the
+   supervisor, not just the Keep, decide to restart a fallen angel.
+4. Boot under GRUB on real hardware (x2APIC and a PIT-less timer source are
+   still to do). The wire parsers and Courier are now fuzzed against random
+   and corrupted input.
