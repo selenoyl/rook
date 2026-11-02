@@ -11,6 +11,7 @@ courier = { path = "../courier" }
 crypto = { path = "../crypto" }
 drawbridge = { path = "../drawbridge" }
 net = { path = "../net" }
+seal = { path = "../seal" }
 vault = { path = "../vault" }
 
 [lib]
@@ -34,6 +35,11 @@ bench = false
 
 [[bin]]
 name = "gabriel"
+test = false
+bench = false
+
+[[bin]]
+name = "raphael"
 test = false
 bench = false
 

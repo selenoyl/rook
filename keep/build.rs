@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 /// The user programs the Keep embeds.
-const PROGRAMS: [&str; 4] = ["michael", "check", "vault", "gabriel"];
+const PROGRAMS: [&str; 5] = ["michael", "check", "vault", "gabriel", "raphael"];
 
 fn main() {
     let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") else {

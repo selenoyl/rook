@@ -119,6 +119,13 @@ pub fn restart(handle: u64, arg: u64) -> Result<(), Refused> {
     abi::result(sys::call(call::RESTART, [handle, arg, 0, 0])).map(|_| ())
 }
 
+/// Live-update the task an Update Writ at `handle` names: swap it into its
+/// second (B) image and start it with `arg`. The caller is expected to have
+/// verified the update's Great Seal first. Refused without the Writ.
+pub fn update(handle: u64, arg: u64) -> Result<(), Refused> {
+    abi::result(sys::call(call::UPDATE, [handle, arg, 0, 0])).map(|_| ())
+}
+
 /// Read one byte from a device register through an I/O Writ.
 pub fn io_in(handle: u64, port: u16) -> Result<u8, Refused> {
     abi::result(sys::call(call::IO_IN, [handle, u64::from(port), 0, 0])).map(|v| v as u8)

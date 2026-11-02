@@ -80,6 +80,17 @@ pub enum Writ {
         space_root: u64,
         image: &'static [u8],
     },
+    /// The right to live-update task `slot`: swap it into `space_root`, a
+    /// second image of its program built and loaded at boot (the A/B "B"
+    /// slot). Like a Restart Writ it carries the recipe — the new entry and
+    /// stack — and only the Keep reads these fields. Raphael holds one and
+    /// applies it once it has verified the update's Great Seal.
+    Update {
+        slot: usize,
+        space_root: u64,
+        entry: u64,
+        stack_top: u64,
+    },
     /// The right to drive a device: I/O ports `[base, base + count)`. The
     /// Keep's microkernel keeps drivers in ring 3, so a driver task holds
     /// one of these for exactly its device's registers and nothing else.
@@ -596,6 +607,32 @@ pub fn restart_recipe(handle: u64) -> Option<(usize, u64, u64, u64, &'static [u8
             }
         })
         .flatten()
+}
+
+/// The A/B recipe named by an Update Writ the running task holds at
+/// `handle`: the target slot and the space to swap it into. None if the
+/// handle holds no Update Writ, so the syscall can refuse.
+pub fn update_recipe(handle: u64) -> Option<(usize, u64, u64, u64)> {
+    SCHEDULER
+        .with(|s| {
+            let cur = s.current;
+            match s.cap(cur, handle) {
+                Some(Writ::Update {
+                    slot,
+                    space_root,
+                    entry,
+                    stack_top,
+                }) => Some((slot, space_root, entry, stack_top)),
+                _ => None,
+            }
+        })
+        .flatten()
+}
+
+/// Whether `slot` is the task now running — used to refuse an operation a
+/// task would aim at itself.
+pub fn is_current(slot: usize) -> bool {
+    SCHEDULER.with(|s| s.current == slot).unwrap_or(false)
 }
 
 /// End the running user task, which faulted, and run the next task. The

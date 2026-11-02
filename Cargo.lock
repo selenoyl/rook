@@ -60,6 +60,7 @@ dependencies = [
  "crypto",
  "drawbridge",
  "net",
+ "seal",
  "vault",
 ]
 

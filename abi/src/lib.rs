@@ -61,6 +61,10 @@ pub mod call {
     /// reloading its image and restarting it with `arg`. Needs that Writ,
     /// and the target must have ended.
     pub const RESTART: u64 = 13;
+    /// UPDATE(handle, arg): live-update the task an Update Writ at `handle`
+    /// names, swapping it into its second (B) image and starting it with
+    /// `arg`. Needs that Writ. Raphael calls it once a Great Seal verifies.
+    pub const UPDATE: u64 = 14;
 }
 
 /// The most bytes one `RANDOM` call fills, bounding the Keep's buffer.

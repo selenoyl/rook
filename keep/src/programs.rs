@@ -16,3 +16,6 @@ pub const VAULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vault.elf"));
 
 /// gabriel: the messenger, who drives the network card.
 pub const GABRIEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gabriel.elf"));
+
+/// raphael: the healer, who applies verified updates.
+pub const RAPHAEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/raphael.elf"));

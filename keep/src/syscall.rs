@@ -73,6 +73,10 @@ pub fn handle(frame: SyscallFrame) -> Context {
             frame.set_result(restart(args[0], args[1]));
             frame.context()
         }
+        call::UPDATE => {
+            frame.set_result(update(args[0], args[1]));
+            frame.context()
+        }
         _ => {
             frame.set_result(Error::NoSuchCall.to_raw());
             frame.context()
@@ -236,6 +240,24 @@ fn restart(handle: u64, arg: u64) -> u64 {
         return Error::BadArgument.to_raw();
     }
     if sched::restart(slot, entry, stack_top, arg) {
+        0
+    } else {
+        Error::BadArgument.to_raw()
+    }
+}
+
+/// UPDATE: live-update the task an Update Writ at `handle` names, swapping
+/// it into its second (B) image. Refused without the Writ, or if the target
+/// is the caller itself (a task cannot re-image itself out from under the
+/// running syscall).
+fn update(handle: u64, arg: u64) -> u64 {
+    let Some((slot, space_root, entry, stack_top)) = sched::update_recipe(handle) else {
+        return Error::BadCapability.to_raw();
+    };
+    if sched::is_current(slot) {
+        return Error::BadArgument.to_raw();
+    }
+    if sched::reimage(slot, space_root, entry, stack_top, arg) {
         0
     } else {
         Error::BadArgument.to_raw()

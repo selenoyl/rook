@@ -100,11 +100,15 @@ CASES = [
         ],
     ),
     (
-        "a running task is live-updated by swapping it into a second address space (A/B)",
+        "Raphael verifies a Great Seal and live-updates the ward (A/B swap)",
         "selftest test=update",
         PASSED,
         [
             "[check] ward: version 1 running",
+            "[check] ward: standing by for a verified update",
+            "[raphael] raphael: the Round Table's seal verifies (Ed25519 + SLH-DSA, k of n)",
+            "[raphael] raphael: a tampered seal is refused",
+            "[raphael] raphael: seal verified, update applied; the ward will come up anew",
             "[check] ward: version 2 running",
             "[check] ward: the verified update is live",
             "[keep] update: the ward runs its updated image; the A/B swap holds",
