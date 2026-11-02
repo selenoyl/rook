@@ -105,8 +105,10 @@ and headless QEMU boot tests.
   the stack) and gives the slot a fresh start. A boot test crashes a task,
   reloads and restarts it, and the next run finds its memory
   re-initialised — proof the image was reloaded, not merely re-entered.
-  This is the mechanism Michael will drive to restart a fallen angel, and
-  Raphael to swap in a verified update.
+  The supervisor drives this through a capability: a **Restart Writ** lets
+  Michael, from ring 3, heal a specific fallen angel and no other; a boot
+  test crashes an angel, has Michael restart it, and watches it recover.
+  Raphael will use the same mechanism to swap in a verified update.
 - **Hands out randomness.** A ChaCha20 CSPRNG, seeded at boot from the
   CPU's hardware generator (RDSEED, else RDRAND), backs a `random` system
   call. It rekeys on every draw, so earlier output can't be recovered from
@@ -465,12 +467,10 @@ builds on top:
    version counter, and rolling back a build that never checks in. The
    hybrid identity (Ed25519 + ML-DSA-87) and hybrid key exchange
    (X25519 + ML-KEM-1024) are already in place.
-2. **A fuller Vault**: writes and deletion from a client over the sealed
-   channel, and freed-space reclamation, so the disk is read-write, not
-   just read-mostly.
-3. Michael driving the restart: the Keep can already reload and restart a
-   crashed task in place; next is a capability (a Task Writ) that lets the
-   supervisor, not just the Keep, decide to restart a fallen angel.
-4. Boot under GRUB on real hardware (x2APIC and a PIT-less timer source are
-   still to do). The wire parsers and Courier are now fuzzed against random
-   and corrupted input.
+2. **A fuller Vault**: freed-space reclamation and larger files, building
+   on the read-write-delete already carried over the sealed channel.
+3. Boot under GRUB on real hardware (x2APIC and a PIT-less timer source are
+   still to do).
+
+The supervisor already heals a fallen angel through a Restart Writ, and the
+wire parsers and Courier are fuzzed against random and corrupted input.
