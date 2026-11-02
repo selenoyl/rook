@@ -14,6 +14,7 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use drawbridge::{Identity, Initiator, InitiatorDone, MSG2_LEN};
 use user::Error;
 use user::abi::{MAX_LOG, check};
@@ -32,10 +33,14 @@ const MESSAGE: &str = "running in ring 3";
 
 user::program!(main);
 
-fn main(mode: u64) -> ! {
-    if mode == check::CRASH {
-        let _ = user::log("crashing on purpose");
-        user::sys::crash();
+fn main(arg: u64) -> ! {
+    match arg & 0xff {
+        check::CRASH => {
+            let _ = user::log("crashing on purpose");
+            user::sys::crash();
+        }
+        check::RESTART => restart_demo(arg >> 8),
+        _ => {}
     }
     match run_checks() {
         Ok(()) => {
@@ -48,6 +53,28 @@ fn main(mode: u64) -> ! {
             user::exit(1)
         }
     }
+}
+
+/// A marker in initialised data (`.data`), so a restart that truly reloads
+/// the image resets it. The crashing generation stamps it with something
+/// else before dying; a later generation seeing the original value proves
+/// the Keep re-initialised the task's memory, not merely re-entered it.
+static DATA_MARK: AtomicU64 = AtomicU64::new(0x1234);
+
+/// The RESTART mode: prove the Keep heals a crashed task. Generation 0
+/// corrupts the marker and crashes on purpose; every later generation finds
+/// the marker back at its initial value (its memory was reloaded) and exits
+/// cleanly.
+fn restart_demo(generation: u64) -> ! {
+    let seen = DATA_MARK.load(Ordering::Relaxed);
+    user::logln!("restart: generation {generation}, data mark {seen:#x}");
+    DATA_MARK.store(0xdead, Ordering::Relaxed);
+    if generation == 0 {
+        let _ = user::log("restart: crashing to force a restart");
+        user::sys::crash();
+    }
+    let _ = user::log("restart: the reloaded task runs with fresh memory");
+    user::exit(0)
 }
 
 fn expect(ok: bool, name: &'static str) -> Result<(), &'static str> {

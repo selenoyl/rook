@@ -418,6 +418,27 @@ pub fn spawn_user(name: &'static str, program: &Program, arg: u64, caps: &[Writ]
         .flatten()
 }
 
+/// Restart the user task in `slot`: give it a fresh run of its program at
+/// `entry` with a new stack and `arg`, re-granting `caps`, while keeping its
+/// existing address space (whose memory the caller has already reloaded).
+/// Returns false if the slot is empty. The task must not be running, and
+/// its memory must be reloaded first, or it resumes in whatever state the
+/// crash left behind.
+pub fn restart(slot: usize, entry: u64, stack_top: u64, arg: u64, caps: &[Writ]) -> bool {
+    SCHEDULER
+        .with(|s| {
+            let (name, root) = {
+                let task = s.task(slot)?;
+                (task.name, task.space_root)
+            };
+            let context = Context::reenter_user(slot, entry, stack_top, arg)?;
+            place(s, slot, name, root, context, caps);
+            Some(())
+        })
+        .flatten()
+        .is_some()
+}
+
 /// Place a Writ in task `slot`'s capability table at `handle`. The Keep
 /// does this at boot; a task can't grant itself a Writ.
 pub fn grant(slot: usize, handle: usize, writ: Writ) {

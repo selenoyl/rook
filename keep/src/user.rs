@@ -88,14 +88,16 @@ fn u64_at(bytes: &[u8], off: usize) -> Option<u64> {
     Some(u64::from_le_bytes(bytes.get(off..end)?.try_into().ok()?))
 }
 
-/// Load `elf` into a new address space built on the Keep's higher half,
-/// and give it a stack. `kernel` is the Keep's own space, whose higher
-/// half the new space shares.
-pub fn load(
-    elf: &[u8],
-    kernel: &AddressSpace,
-    frames: &mut impl FrameSource,
-) -> Result<Program, LoadError> {
+/// The parts of the ELF header the loader uses, validated.
+struct Header {
+    entry: u64,
+    phoff: u64,
+    phnum: u16,
+}
+
+/// Parse and check the ELF header: a 64-bit little-endian x86-64 executable
+/// with a sane program-header table and an entry point in user space.
+fn parse_header(elf: &[u8]) -> Result<Header, LoadError> {
     let header = elf.get(..ELF_HEADER).ok_or(LoadError::Truncated)?;
     if header.get(..4) != Some(b"\x7fELF") {
         return Err(LoadError::NotElf);
@@ -109,7 +111,6 @@ pub fn load(
     if !ok {
         return Err(LoadError::Unsupported);
     }
-
     let entry = u64_at(header, 24).ok_or(LoadError::Truncated)?;
     let phoff = u64_at(header, 32).ok_or(LoadError::Truncated)?;
     let phentsize = u16_at(header, 54).ok_or(LoadError::Truncated)?;
@@ -120,10 +121,30 @@ pub fn load(
     if phnum > MAX_SEGMENTS {
         return Err(LoadError::TooManySegments);
     }
+    if !(USER_MIN..USER_MAX).contains(&entry) {
+        return Err(LoadError::BadSegment(
+            entry,
+            "entry point outside user space",
+        ));
+    }
+    Ok(Header {
+        entry,
+        phoff,
+        phnum,
+    })
+}
 
-    let mut space = AddressSpace::new_user(kernel, frames)?;
-    for i in 0..phnum {
-        let base = usize::try_from(phoff)
+/// Call `page` for every page of every loadable segment: its virtual
+/// address, the flags it must be mapped with, and the file bytes that fall
+/// in that page (empty for `.bss` and padding). All the Gatehouse segment
+/// checks live here, so `load` and `reload` enforce them alike.
+fn walk_segments(
+    elf: &[u8],
+    header: &Header,
+    mut page: impl FnMut(u64, u64, &[u8]) -> Result<(), LoadError>,
+) -> Result<(), LoadError> {
+    for i in 0..header.phnum {
+        let base = usize::try_from(header.phoff)
             .ok()
             .and_then(|o| {
                 usize::from(i)
@@ -137,78 +158,105 @@ pub fn load(
         if u32_at(ph, 0) != Some(PT_LOAD) {
             continue;
         }
-        load_segment(&mut space, elf, ph, frames)?;
-    }
 
-    map_stack(&mut space, frames)?;
-    if !(USER_MIN..USER_MAX).contains(&entry) {
-        return Err(LoadError::BadSegment(
-            entry,
-            "entry point outside user space",
-        ));
+        let flags = u32_at(ph, 4).ok_or(LoadError::Truncated)?;
+        let offset = u64_at(ph, 8).ok_or(LoadError::Truncated)?;
+        let vaddr = u64_at(ph, 16).ok_or(LoadError::Truncated)?;
+        let filesz = u64_at(ph, 32).ok_or(LoadError::Truncated)?;
+        let memsz = u64_at(ph, 40).ok_or(LoadError::Truncated)?;
+        let bad = |why| LoadError::BadSegment(vaddr, why);
+
+        if flags & PF_W != 0 && flags & PF_X != 0 {
+            return Err(bad("writable and executable"));
+        }
+        if !vaddr.is_multiple_of(PAGE_SIZE) {
+            return Err(bad("not page-aligned"));
+        }
+        if filesz > memsz {
+            return Err(bad("file size exceeds memory size"));
+        }
+        if memsz == 0 || memsz > MAX_SEGMENT {
+            return Err(bad("empty or too large"));
+        }
+        let end = vaddr.checked_add(memsz).ok_or(bad("wraps around"))?;
+        if vaddr < USER_MIN || end > USER_MAX {
+            return Err(bad("outside user space"));
+        }
+        let file_end = usize::try_from(offset)
+            .ok()
+            .and_then(|o| usize::try_from(filesz).ok().and_then(|n| o.checked_add(n)))
+            .ok_or(LoadError::Truncated)?;
+        let contents = elf
+            .get(usize::try_from(offset).map_err(|_| LoadError::Truncated)?..file_end)
+            .ok_or(LoadError::Truncated)?;
+
+        let mut page_flags = USER;
+        if flags & PF_W != 0 {
+            page_flags |= WRITABLE;
+        }
+        if flags & PF_X == 0 {
+            page_flags |= NO_EXECUTE;
+        }
+
+        // Each page carries the file bytes that fall in it; the rest,
+        // including all of .bss, is zero.
+        let mut done: u64 = 0;
+        while done < memsz {
+            let virt = vaddr.checked_add(done).ok_or(bad("wraps around"))?;
+            let start = usize::try_from(done).map_err(|_| LoadError::Truncated)?;
+            let take = contents.len().saturating_sub(start).min(PAGE_SIZE as usize);
+            let data = contents
+                .get(start..start.checked_add(take).unwrap_or(start))
+                .unwrap_or(&[]);
+            page(virt, page_flags, data)?;
+            done = done.checked_add(PAGE_SIZE).ok_or(bad("wraps around"))?;
+        }
     }
+    Ok(())
+}
+
+/// Load `elf` into a new address space built on the Keep's higher half,
+/// and give it a stack. `kernel` is the Keep's own space, whose higher
+/// half the new space shares.
+pub fn load(
+    elf: &[u8],
+    kernel: &AddressSpace,
+    frames: &mut impl FrameSource,
+) -> Result<Program, LoadError> {
+    let header = parse_header(elf)?;
+    let mut space = AddressSpace::new_user(kernel, frames)?;
+    walk_segments(elf, &header, |virt, flags, data| {
+        space.map_filled(virt, flags, data, frames)?;
+        Ok(())
+    })?;
+    map_stack(&mut space, frames)?;
     Ok(Program {
         space,
-        entry,
+        entry: header.entry,
         stack_top: USER_STACK_TOP,
     })
 }
 
-fn load_segment(
-    space: &mut AddressSpace,
-    elf: &[u8],
-    ph: &[u8],
-    frames: &mut impl FrameSource,
-) -> Result<(), LoadError> {
-    let flags = u32_at(ph, 4).ok_or(LoadError::Truncated)?;
-    let offset = u64_at(ph, 8).ok_or(LoadError::Truncated)?;
-    let vaddr = u64_at(ph, 16).ok_or(LoadError::Truncated)?;
-    let filesz = u64_at(ph, 32).ok_or(LoadError::Truncated)?;
-    let memsz = u64_at(ph, 40).ok_or(LoadError::Truncated)?;
-    let bad = |why| LoadError::BadSegment(vaddr, why);
-
-    if flags & PF_W != 0 && flags & PF_X != 0 {
-        return Err(bad("writable and executable"));
-    }
-    if !vaddr.is_multiple_of(PAGE_SIZE) {
-        return Err(bad("not page-aligned"));
-    }
-    if filesz > memsz {
-        return Err(bad("file size exceeds memory size"));
-    }
-    if memsz == 0 || memsz > MAX_SEGMENT {
-        return Err(bad("empty or too large"));
-    }
-    let end = vaddr.checked_add(memsz).ok_or(bad("wraps around"))?;
-    if vaddr < USER_MIN || end > USER_MAX {
-        return Err(bad("outside user space"));
-    }
-    let file_end = usize::try_from(offset)
-        .ok()
-        .and_then(|o| usize::try_from(filesz).ok().and_then(|n| o.checked_add(n)))
-        .ok_or(LoadError::Truncated)?;
-    let contents = elf
-        .get(usize::try_from(offset).map_err(|_| LoadError::Truncated)?..file_end)
-        .ok_or(LoadError::Truncated)?;
-
-    let mut page_flags = USER;
-    if flags & PF_W != 0 {
-        page_flags |= WRITABLE;
-    }
-    if flags & PF_X == 0 {
-        page_flags |= NO_EXECUTE;
-    }
-
-    // Map each page of the segment, copying the file bytes that fall in
-    // it and leaving the rest (including all of .bss) zero.
-    let mut done: u64 = 0;
-    while done < memsz {
-        let virt = vaddr.checked_add(done).ok_or(bad("wraps around"))?;
-        let start = usize::try_from(done).map_err(|_| LoadError::Truncated)?;
-        let take = contents.len().saturating_sub(start).min(PAGE_SIZE as usize);
-        let data = contents.get(start..start.checked_add(take).unwrap_or(start));
-        space.map_filled(virt, page_flags, data.unwrap_or(&[]), frames)?;
-        done = done.checked_add(PAGE_SIZE).ok_or(bad("wraps around"))?;
+/// Reload `elf` into a program's existing address space: re-copy every
+/// loadable segment and re-zero the stack, reusing the frames already
+/// mapped. It allocates nothing, so the Keep can heal a crashed task after
+/// the frame allocator is sealed. `program` must be the one first loaded
+/// from this same `elf`, and its task must not be running.
+pub fn reload(program: &Program, elf: &[u8]) -> Result<(), LoadError> {
+    let header = parse_header(elf)?;
+    walk_segments(elf, &header, |virt, _flags, data| {
+        program
+            .space
+            .fill_mapped(virt, data)
+            .map_err(LoadError::Map)
+    })?;
+    let mut virt = user_stack_base();
+    while virt < USER_STACK_TOP {
+        program
+            .space
+            .fill_mapped(virt, &[])
+            .map_err(LoadError::Map)?;
+        virt = virt.checked_add(PAGE_SIZE).ok_or(LoadError::Truncated)?;
     }
     Ok(())
 }

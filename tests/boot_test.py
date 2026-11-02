@@ -71,6 +71,22 @@ CASES = [
         ],
     ),
     (
+        "a crashed ring-3 task is reloaded into its frames and restarted — Rook heals itself",
+        "selftest test=restart",
+        PASSED,
+        [
+            "[check] restart: generation 0, data mark 0x1234",
+            "[check] restart: crashing to force a restart",
+            "invalid opcode (vector 6)",
+            "reloading its image and restarting it (generation 1)",
+            # Generation 1 sees the .data marker back at its initial value:
+            # the task's memory was re-initialised, not merely re-entered.
+            "[check] restart: generation 1, data mark 0x1234",
+            "[check] restart: the reloaded task runs with fresh memory",
+            "[keep] restart: the reloaded task ran to completion; Rook healed itself",
+        ],
+    ),
+    (
         "reading the null page faults and fails closed",
         "selftest test=null",
         STOPPED,

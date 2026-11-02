@@ -136,6 +136,11 @@ pub mod check {
     /// Crash on purpose, to show the Keep ends a crashed task cleanly and
     /// keeps running.
     pub const CRASH: u64 = 1;
+    /// Self-healing: crash on generation 0, then on each restart log a
+    /// `.data` marker proving memory was re-initialised, and exit once past
+    /// generation 0. The generation rides in the argument above the low
+    /// byte (`RESTART | generation << 8`).
+    pub const RESTART: u64 = 2;
 }
 
 /// Roles for `gabriel`, the network messenger, chosen with the task's

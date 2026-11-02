@@ -102,6 +102,32 @@ impl Context {
         Some(Context { frame })
     }
 
+    /// Rebuild a ring-3 start frame for a slot already claimed — a restart.
+    /// Same kernel stack, a fresh entry, user stack and argument. Returns
+    /// None if `slot` is out of range. Unlike `new_user` it does not claim
+    /// the slot, since the task that crashed already holds it.
+    pub fn reenter_user(slot: usize, entry: u64, user_stack_top: u64, arg: u64) -> Option<Context> {
+        if slot >= TASK_SLOTS {
+            return None;
+        }
+        let frame = stack_top(slot) - size_of::<TrapFrame>() as u64;
+        // SAFETY: the slot was claimed when the task first spawned and is
+        // not running now (it crashed or exited), so its kernel stack is
+        // mapped read-write and nothing else uses it. The frame is in the
+        // stack's top 176 bytes, 8-aligned.
+        write_frame(
+            frame,
+            Start {
+                rip: entry,
+                cs: USER_CODE,
+                ss: USER_DATA,
+                rsp: user_stack_top - 8,
+                arg,
+            },
+        );
+        Some(Context { frame })
+    }
+
     /// The registers the trap entry just saved at `frame`.
     pub(super) fn saved(frame: *mut TrapFrame) -> Context {
         Context {

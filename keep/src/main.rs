@@ -182,6 +182,13 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         });
     }
 
+    // Self-healing (test=restart): a ring-3 task that crashes is reloaded
+    // into its own frames and restarted in place, with nothing allocated
+    // after boot. Only that task runs; the Keep exits once it is healed.
+    if boot.value("test") == Some("restart") {
+        run_restart_test(&booted.check, tick_counts);
+    }
+
     // Everything else runs under the scheduler. Michael comes first, with
     // Writs to hear from and reply to the task he watches.
     let michael = spawn_user(
@@ -589,6 +596,60 @@ fn wait_for_gabriel(gabriel: usize) -> bool {
     }
     kprintln!("[keep] user: gabriel did not finish in time");
     false
+}
+
+/// Self-healing: run the check program in RESTART mode, and each time it
+/// crashes, reload its image into its existing frames and restart it in
+/// place — nothing allocated after boot. The machine exits with success
+/// once the restarted task runs cleanly, proving a crashed task can be
+/// healed. This is the mechanism Michael and Raphael will drive.
+fn run_restart_test(check: &user::Program, tick_counts: u32) -> ! {
+    // A broken program that never stops crashing must not loop forever.
+    const MAX_RESTARTS: u64 = 3;
+
+    let Some(slot) = sched::spawn_user("check", check, abi::check::RESTART, &[]) else {
+        kprintln!("[keep] restart: no task slot for the test");
+        arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+    };
+    arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
+    kprintln!("[keep] sched: timer on, {TICKS_PER_SECOND} ticks a second");
+
+    let mut generation = 0u64;
+    loop {
+        let outcome = loop {
+            arch::cpu::wait_for_interrupt();
+            if let Some(outcome) = sched::outcome(slot) {
+                break outcome;
+            }
+        };
+        match outcome {
+            Outcome::Faulted if generation < MAX_RESTARTS => {
+                generation += 1;
+                kprintln!(
+                    "[keep] restart: task {slot} (check) crashed; reloading its image and restarting it (generation {generation})"
+                );
+                if let Err(e) = user::reload(check, programs::CHECK) {
+                    kprintln!("[keep] restart: could not reload the task: {e}");
+                    arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+                }
+                let arg = abi::check::RESTART | (generation << 8);
+                if !sched::restart(slot, check.entry, check.stack_top, arg, &[]) {
+                    kprintln!("[keep] restart: could not restart the task");
+                    arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+                }
+            }
+            Outcome::Exited(0) => {
+                kprintln!(
+                    "[keep] restart: the reloaded task ran to completion; Rook healed itself"
+                );
+                arch::qemu::exit(arch::qemu::EXIT_SUCCESS);
+            }
+            _ => {
+                kprintln!("[keep] restart: the task did not recover; stopping");
+                arch::qemu::exit(arch::qemu::EXIT_FAILURE);
+            }
+        }
+    }
 }
 
 /// The kernel-task-stack test: recurse until the task's stack runs out.

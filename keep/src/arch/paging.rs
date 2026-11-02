@@ -278,6 +278,29 @@ impl AddressSpace {
         Ok(AddressSpace { root })
     }
 
+    /// Rewrite the page already mapped at `virt`: its first bytes set to
+    /// `data`, the rest of the page zeroed. Unlike `map_filled` it allocates
+    /// nothing — it reuses the frame already there — so a program can be
+    /// reloaded into its existing address space after the allocator is
+    /// sealed. `virt` must be page-aligned and already mapped, and `data` no
+    /// longer than a page. The page must be quiescent: its task not running.
+    pub fn fill_mapped(&self, virt: u64, data: &[u8]) -> Result<(), MapError> {
+        if !virt.is_multiple_of(PAGE_SIZE) || data.len() as u64 > PAGE_SIZE {
+            return Err(MapError::Unaligned(virt));
+        }
+        let (phys, _) = self.translate(virt).ok_or(MapError::Missing(virt))?;
+        let dst = phys_to_virt(phys) as *mut u8;
+        for i in 0..PAGE_SIZE as usize {
+            let byte = data.get(i).copied().unwrap_or(0);
+            // SAFETY: `phys` is the frame `virt` maps to in this space (from
+            // `translate`), reachable through the window; `i` stays below
+            // PAGE_SIZE, so the write is inside that one frame. The frame
+            // backs a task that is not running, so nothing else touches it.
+            unsafe { dst.add(i).write_volatile(byte) };
+        }
+        Ok(())
+    }
+
     /// The physical address and flags `virt` maps to, if it is mapped.
     pub fn translate(&self, virt: u64) -> Option<(u64, u64)> {
         let mut table = self.root;
