@@ -54,6 +54,7 @@ disagree, so adding an `unsafe` use means adding (or updating) a row.
 | `keep/src/arch/task.rs` | `SyscallFrame` | 3 | Read the call number and arguments, and set the result, in the saved frame | The trap entry passed a frame on the current kernel stack, which stays in place until the syscall returns a frame to restore. |
 | `keep/src/arch/task.rs` | `Context` | 3 | Read a task's message words, and deliver a message or a result, in its saved frame | The frame is on a task's kernel stack and lives as long as the task; the scheduler uses these only to move a message between two tasks' saved registers. |
 | `keep/src/arch/vga.rs` | `put` | 1 | Volatile write to the text buffer | Row and column are bounds-checked, so the write stays inside the 80x25 buffer, mapped by the window. |
+| `keep/src/arch/vga.rs` | `get` | 1 | Volatile read of one text cell, for scrolling | Callers pass row < HEIGHT and col < WIDTH, so the read stays inside the 80x25 buffer, mapped by the window. |
 | `keep/src/arch/vga.rs` | `set_color` | 1 | Write one entry of the VGA DAC color table | Selects an entry and sets its red, green and blue; only changes how a color looks. |
 | `keep/src/arch/vga.rs` | `hide_cursor` | 1 | Write the VGA CRT controller | Register 0x0A only turns the text cursor off. |
 | `user/src/sys.rs` | `program!` | 1 | `#[unsafe(no_mangle)]` on the program's `_start` | The Keep starts the program by jumping to its ELF entry, which the linker places at `_start`. |

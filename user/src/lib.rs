@@ -13,6 +13,7 @@ pub mod sys;
 
 pub mod ata;
 pub mod ne2000;
+pub mod ps2;
 
 pub use abi;
 pub use abi::Error;
@@ -61,6 +62,44 @@ pub fn logf(args: fmt::Arguments) -> Result<(), Refused> {
 #[macro_export]
 macro_rules! logln {
     ($($arg:tt)*) => { let _ = $crate::logf(format_args!($($arg)*)); };
+}
+
+/// Write text to the VGA console — the screen — the way `log` writes to the
+/// serial log. Sent in chunks no larger than the Keep's PRINT buffer, so
+/// any length is fine. Control bytes the console honours: `\n` newline,
+/// `\r` carriage return, 0x08 backspace, 0x0c clear-screen.
+pub fn print(s: &str) {
+    for chunk in s.as_bytes().chunks(abi::MAX_PRINT as usize) {
+        let _ = sys::call(
+            call::PRINT,
+            [chunk.as_ptr() as u64, chunk.len() as u64, 0, 0],
+        );
+    }
+}
+
+/// Print a formatted line to the screen, ending it with a newline. Used
+/// through the `scrln!` macro.
+pub fn scrlnf(args: fmt::Arguments) {
+    let mut line = Line {
+        bytes: [0; abi::MAX_LOG as usize],
+        len: 0,
+    };
+    let _ = line.write_fmt(args);
+    if line.len < line.bytes.len() {
+        line.bytes[line.len] = b'\n';
+        line.len += 1;
+    }
+    let _ = sys::call(
+        call::PRINT,
+        [line.bytes.as_ptr() as u64, line.len as u64, 0, 0],
+    );
+}
+
+/// Print a formatted line to the VGA console, like `logln!` but to the
+/// screen.
+#[macro_export]
+macro_rules! scrln {
+    ($($arg:tt)*) => { $crate::scrlnf(format_args!($($arg)*)); };
 }
 
 /// LOG with any address and length, valid or not.

@@ -15,7 +15,7 @@ use crate::arch::cpu;
 use crate::arch::paging::AddressSpace;
 use crate::arch::task::{Context, SyscallFrame};
 use crate::sched;
-use abi::{Error, MAX_IO_WORDS, MAX_LOG, MAX_RANDOM, MAX_SLEEP, call};
+use abi::{Error, MAX_IO_WORDS, MAX_LOG, MAX_PRINT, MAX_RANDOM, MAX_SLEEP, call};
 
 /// Handle one system call and return the task to run next: the caller
 /// again for a call that just returns a value, or another task for one
@@ -77,6 +77,10 @@ pub fn handle(frame: SyscallFrame) -> Context {
             frame.set_result(update(args[0], args[1]));
             frame.context()
         }
+        call::PRINT => {
+            frame.set_result(print(args[0], args[1]));
+            frame.context()
+        }
         _ => {
             frame.set_result(Error::NoSuchCall.to_raw());
             frame.context()
@@ -108,6 +112,25 @@ fn log(address: u64, length: u64) -> u64 {
     let text = core::str::from_utf8(message).unwrap_or("");
     let name = sched::running_task().map_or("task", |(_, name)| name);
     kprintln!("[{name}] {text}");
+    0
+}
+
+/// PRINT: write the task's text to the VGA console at the cursor. Like
+/// LOG, but to the screen the interactive shell draws on.
+fn print(address: u64, length: u64) -> u64 {
+    if length == 0 {
+        return 0;
+    }
+    if length > MAX_PRINT {
+        return Error::TooLong.to_raw();
+    }
+    if !AddressSpace::current().user_range_ok(address, length) {
+        return Error::BadAddress.to_raw();
+    }
+    let mut buffer = [0u8; MAX_PRINT as usize];
+    let bytes = &mut buffer[..length as usize];
+    cpu::copy_from_user(bytes, address);
+    arch::vga::console_write(bytes);
     0
 }
 

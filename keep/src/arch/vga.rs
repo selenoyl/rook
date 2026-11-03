@@ -3,11 +3,93 @@
 
 use super::paging::phys_to_virt;
 use super::port::outb;
+use super::sync::Exclusive;
 
 pub const WIDTH: usize = 80;
 pub const HEIGHT: usize = 25;
 /// Physical address of the text buffer.
 pub const BUFFER_PHYS: u64 = 0xB8000;
+
+/// The text console's color: bright white on black.
+const TEXT_ATTR: u8 = 0x0f;
+
+/// Where the next console character goes.
+struct Cursor {
+    row: usize,
+    col: usize,
+}
+
+static CURSOR: Exclusive<Cursor> = Exclusive::new(Cursor { row: 0, col: 0 });
+
+/// Read one text cell (character and attribute together).
+fn get(row: usize, col: usize) -> u16 {
+    let cell = (phys_to_virt(BUFFER_PHYS) as *const u16).wrapping_add(row * WIDTH + col);
+    // SAFETY: callers pass row < HEIGHT and col < WIDTH, so `cell` is inside
+    // the text buffer, mapped through the physical-memory window. Volatile,
+    // because it is device memory.
+    unsafe { cell.read_volatile() }
+}
+
+/// Write bytes to the text console at the cursor, advancing it: `\n` ends a
+/// line, `\r` returns to column 0, backspace (0x08) erases one cell, and
+/// form-feed (0x0c) clears the screen. The screen scrolls when the cursor
+/// runs off the bottom. This is what the `print` system call drives.
+pub fn console_write(bytes: &[u8]) {
+    CURSOR.with(|c| {
+        for &b in bytes {
+            write_byte(c, b);
+        }
+    });
+}
+
+fn write_byte(c: &mut Cursor, b: u8) {
+    match b {
+        b'\n' => newline(c),
+        b'\r' => c.col = 0,
+        0x0c => {
+            clear(TEXT_ATTR);
+            c.row = 0;
+            c.col = 0;
+        }
+        0x08 => {
+            if c.col > 0 {
+                c.col -= 1;
+                put(c.row, c.col, b' ', TEXT_ATTR);
+            }
+        }
+        0x20..=0x7e => {
+            put(c.row, c.col, b, TEXT_ATTR);
+            c.col += 1;
+            if c.col >= WIDTH {
+                newline(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn newline(c: &mut Cursor) {
+    c.col = 0;
+    if c.row + 1 >= HEIGHT {
+        scroll();
+    } else {
+        c.row += 1;
+    }
+}
+
+/// Move every row up one, clearing the bottom row: the console has reached
+/// the foot of the screen.
+fn scroll() {
+    for row in 1..HEIGHT {
+        for col in 0..WIDTH {
+            let cell = get(row, col);
+            put(row - 1, col, cell as u8, (cell >> 8) as u8);
+        }
+    }
+    for col in 0..WIDTH {
+        put(HEIGHT - 1, col, b' ', TEXT_ATTR);
+    }
+}
 
 /// Put one character on screen. Positions off screen are ignored.
 pub fn put(row: usize, col: usize, ch: u8, attr: u8) {

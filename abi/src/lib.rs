@@ -65,7 +65,14 @@ pub mod call {
     /// names, swapping it into its second (B) image and starting it with
     /// `arg`. Needs that Writ. Raphael calls it once a Great Seal verifies.
     pub const UPDATE: u64 = 14;
+    /// PRINT(address, length): write text to the VGA console at the cursor.
+    /// Needs no Writ — like LOG, but to the screen rather than the serial
+    /// log; the interactive shell draws with it.
+    pub const PRINT: u64 = 15;
 }
+
+/// The most bytes one `PRINT` call writes, bounding the Keep's buffer.
+pub const MAX_PRINT: u64 = 256;
 
 /// The most bytes one `RANDOM` call fills, bounding the Keep's buffer.
 pub const MAX_RANDOM: u64 = 256;

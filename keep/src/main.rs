@@ -54,6 +54,11 @@ const ATA_IO_COUNT: u16 = 8;
 const NIC_IO_BASE: u16 = 0x300;
 const NIC_IO_COUNT: u16 = 0x20;
 
+/// The PS/2 keyboard controller's ports (0x60 data, 0x64 status), covered by
+/// the shell's I/O Writ so it can read the keyboard from ring 3.
+const KBD_IO_BASE: u16 = 0x60;
+const KBD_IO_COUNT: u16 = 0x05;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Memory below 1 MiB belongs to the BIOS and devices.
@@ -203,6 +208,25 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
         && let (Some(ward_b), Some(raphael)) = (booted.ward_b.as_ref(), booted.raphael.as_ref())
     {
         run_update_test(&booted.check, ward_b, raphael, tick_counts);
+    }
+
+    // The interactive console (the GRUB ISO boots here): a shell on the
+    // keyboard and the VGA screen. It gets an I/O Writ for the keyboard
+    // ports and nothing else; the Keep then idles while it runs.
+    if let Some(shell) = booted.shell.as_ref() {
+        let task = spawn_user(
+            "shell",
+            shell,
+            0,
+            &[Writ::Io {
+                base: KBD_IO_BASE,
+                count: KBD_IO_COUNT,
+            }],
+        );
+        arch::apic::start_timer(arch::idt::TIMER_VECTOR, tick_counts);
+        kprintln!("[keep] sched: timer on, {TICKS_PER_SECOND} ticks a second");
+        kprintln!("[keep] console: shell ready on the keyboard and screen (task {task})");
+        sched::become_idle();
     }
 
     // Everything else runs under the scheduler. Michael comes first, with
@@ -375,6 +399,8 @@ struct Booted {
     ward_b: Option<user::Program>,
     /// Raphael, the healer, loaded only for the live-update demo.
     raphael: Option<user::Program>,
+    /// The interactive shell, loaded only for the console/ISO boot.
+    shell: Option<user::Program>,
 }
 
 /// Replace the boot page tables with the Keep's own, load the user
@@ -427,6 +453,10 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
         updating.then(|| load_program("check", programs::CHECK, &kernel.space, &mut frames));
     let raphael =
         updating.then(|| load_program("raphael", programs::RAPHAEL, &kernel.space, &mut frames));
+    // The interactive console, loaded only when asked for (the GRUB ISO).
+    let shell = boot
+        .has_word("shell")
+        .then(|| load_program("shell", programs::SHELL, &kernel.space, &mut frames));
 
     frames.seal();
     kprintln!(
@@ -449,6 +479,7 @@ fn setup_memory(boot: &BootInfo, apic: u64) -> Booted {
         gabriel,
         ward_b,
         raphael,
+        shell,
     }
 }
 

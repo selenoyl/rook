@@ -43,5 +43,10 @@ name = "raphael"
 test = false
 bench = false
 
+[[bin]]
+name = "shell"
+test = false
+bench = false
+
 [lints]
 workspace = true
