@@ -40,12 +40,21 @@ def main():
     monitor = os.path.join(work, "monitor.sock")
     ppm = os.path.join(work, "screen.ppm")
 
-    qemu = subprocess.Popen([
+    command = [
         "qemu-system-x86_64", "-cpu", "max", "-kernel", kernel, "-m", "128M",
         "-display", "none", "-no-reboot",
         "-serial", f"file:{serial}",
         "-monitor", f"unix:{monitor},server,nowait",
-    ])
+        # A NE2000 NIC on QEMU's user network, as Gabriel expects.
+        "-netdev", "user,id=n0",
+        "-device", "ne2k_isa,netdev=n0",
+    ]
+    # Attach the Vault's disk if it was built next to the kernel, so the
+    # storage service — which the boot's self-check talks to — can answer.
+    disk = os.path.join(os.path.dirname(os.path.abspath(kernel)), "disk.img")
+    if os.path.exists(disk):
+        command += ["-drive", f"file={disk},format=raw,if=ide"]
+    qemu = subprocess.Popen(command)
     try:
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
