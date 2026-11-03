@@ -115,6 +115,18 @@ CASES = [
         ],
     ),
     (
+        "the console boot runs the device-free self-check (the GRUB ISO path)",
+        "selftest console",
+        PASSED,
+        [
+            "[check] crypto: SHA-2/3, ChaCha20-Poly1305, X25519, Ed25519, ML-KEM-1024, ML-DSA-87, SLH-DSA verified",
+            "[check] drawbridge over IPC: sealed channel with the supervisor",
+            "[check] vault: skipped on the console boot (no disk assumed)",
+            "[check] all checks passed",
+            "[keep] selftest: passed",
+        ],
+    ),
+    (
         "reading the null page faults and fails closed",
         "selftest test=null",
         STOPPED,

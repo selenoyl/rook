@@ -410,13 +410,15 @@ QEMU offers SMEP, SMAP and UMIP.
 | `make run` | Boots it in a QEMU window, with the boot log in your terminal |
 | `make test` | Format and clippy checks, the review checks below, and the boot tests |
 | `make screen` | Boots headless and saves the screen to `build/screen.png` |
+| `make iso` | Builds a bootable GRUB ISO, `build/rook.iso`, for a real VM |
+| `make run-iso` | Boots that ISO in QEMU through BIOS + GRUB, not `-kernel` |
 
-The boot tests run QEMU eight times. Two must exit with QEMU status 33,
-which means success: a normal self-test boot (ring 3 verified), and a
-boot where the ring-3 test program crashes on purpose and the Keep ends
-it and keeps Michael running. The other six attack the Keep's own
-protections with `test=NAME` and must log the fault and exit with 35,
-the fail-closed code:
+The boot tests run QEMU twelve times. Six must exit with QEMU status 33,
+which means success — the self-test boot (ring 3 verified), the console
+boot, a crashed task the Keep ends, the self-heal restart, the
+supervisor's heal, and Raphael's verified update. The other six attack the
+Keep's own protections with `test=NAME` and must log the fault and exit
+with 35, the fail-closed code:
 
 | Test | The attack | What stops it |
 | --- | --- | --- |
@@ -431,6 +433,29 @@ QEMU's Multiboot loader only accepts 32-bit ELF files, and a 32-bit ELF
 can't describe code linked at `0xFFFFFFFF80000000`. So the build ships a
 flat image, `build/keep.bin`, whose Multiboot header gives the load
 addresses; the loader parses no ELF at all.
+
+## Booting on a real VM (the GRUB ISO)
+
+`make run` uses QEMU's `-kernel` shortcut, which no real machine has.
+`make iso` instead wraps the same Multiboot image in a GRUB rescue image,
+`build/rook.iso` — a hybrid ISO that boots as a CD or a USB stick, through
+ordinary BIOS firmware, a bootloader, then the Keep. `make run-iso` boots
+it that way in QEMU, the same chain a real BIOS VM uses.
+
+The ISO boots in **console mode** (`console` on GRUB's command line): the
+Keep, Michael and the ring-3 self-check come up — ring 0/3 walls, the
+scheduler, the CSPRNG, all the cryptography and a Drawbridge session — but
+nothing that assumes QEMU's emulated devices. There is no NE2000 to drive
+and no disk to mount, so Gabriel and the Vault sit out; the Keep settles at
+the banner. (Building `grub-mkrescue` needs the `grub-pc-bin` and `xorriso`
+packages.)
+
+To boot it in **Hyper-V**, make a **Generation 1** VM (BIOS, not UEFI),
+attach `rook.iso` as its DVD, and for the serial log add a COM port piped to
+a named pipe. Generation 2 (UEFI) is not supported yet — it has no BIOS,
+VGA or legacy serial, which is its own port. This has been verified through
+QEMU's BIOS+GRUB path; the last-mile hardware quirks on any given hypervisor
+are still to be shaken out.
 
 ## Layout
 

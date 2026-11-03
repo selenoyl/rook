@@ -3,16 +3,19 @@
 #   make run      boot it in a QEMU window (serial log in this terminal)
 #   make test     lints, review checks and boot tests
 #   make screen   boot headless and save the screen to build/screen.png
+#   make iso      build a bootable GRUB ISO (build/rook.iso) for a real VM
+#   make run-iso  boot that ISO in QEMU through BIOS + GRUB (serial here)
 
 KERNEL   := target/x86_64-unknown-none/release/keep
 USER_DIR := target/x86_64-unknown-none/release
 IMAGE    := build/keep.bin
 DISK     := build/disk.img
+ISO      := build/rook.iso
 QEMU     := qemu-system-x86_64 -cpu max -m 128M -no-reboot
 DRIVE    := -drive file=$(DISK),format=raw,if=ide
 NET      := -netdev user,id=n0 -device ne2k_isa,netdev=n0
 
-.PHONY: all build user run test check screen disk clean FORCE
+.PHONY: all build user run test check screen iso run-iso disk clean FORCE
 
 all: build
 
@@ -52,6 +55,24 @@ test: build check $(DISK)
 
 screen: build $(DISK)
 	python3 tools/screenshot.py $(IMAGE) build/screen.png
+
+# A bootable GRUB ISO: GRUB loads the Keep as a Multiboot kernel and boots
+# it in "console" mode (no disk or NIC assumed). Boots on a real BIOS VM —
+# Hyper-V Gen 1, VirtualBox — or bare metal, not only QEMU's -kernel.
+iso: $(ISO)
+
+$(ISO): build tools/grub.cfg
+	rm -rf build/iso
+	mkdir -p build/iso/boot/grub
+	cp $(IMAGE) build/iso/boot/keep.bin
+	cp tools/grub.cfg build/iso/boot/grub/grub.cfg
+	grub-mkrescue --install-modules="multiboot normal" -o $(ISO) build/iso
+	@echo "built $(ISO)"
+
+# Boot the ISO the way a real machine would: BIOS firmware, then GRUB, then
+# the Keep — no -kernel shortcut. Serial log in this terminal.
+run-iso: $(ISO)
+	$(QEMU) -cdrom $(ISO) -serial stdio
 
 clean:
 	cargo clean

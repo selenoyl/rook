@@ -240,6 +240,15 @@ pub fn keep_main(multiboot: bool, boot: BootInfo) -> ! {
             Watch::Crash,
             None,
         )),
+        // Console boot (a GRUB ISO on a plain PC or VM): bring up the Keep,
+        // the supervisor and the ring-3 self-check, but nothing that needs
+        // QEMU's emulated devices — no Vault (no disk) and no Gabriel (no
+        // NE2000). The self-check runs its device-free parts and the Keep
+        // idles at the banner.
+        _ if boot.has_word("console") => {
+            let check = spawn_check(&booted.check, abi::check::CONSOLE, michael);
+            Some((check, Watch::Checks, None))
+        }
         _ => {
             let check = spawn_check(&booted.check, abi::check::CALLS, michael);
             spawn_vault(&booted.vault);

@@ -153,6 +153,10 @@ pub mod check {
     /// low byte, `WARD | version << 8`) and, at version 1, wait to be
     /// updated; at version 2 and up — the image swapped in — exit cleanly.
     pub const WARD: u64 = 3;
+    /// Like `CALLS`, but skip the parts that need real devices — the Vault's
+    /// disk above all — so the self-check runs on hardware that has none.
+    /// Used by the console boot (a GRUB ISO on a plain PC or VM).
+    pub const CONSOLE: u64 = 4;
 }
 
 /// Roles for `michael`, the supervisor, chosen with the task's start

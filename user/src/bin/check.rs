@@ -34,7 +34,8 @@ const MESSAGE: &str = "running in ring 3";
 user::program!(main);
 
 fn main(arg: u64) -> ! {
-    match arg & 0xff {
+    let mode = arg & 0xff;
+    match mode {
         check::CRASH => {
             let _ = user::log("crashing on purpose");
             user::sys::crash();
@@ -43,7 +44,9 @@ fn main(arg: u64) -> ! {
         check::WARD => ward_demo(arg >> 8),
         _ => {}
     }
-    match run_checks() {
+    // Console mode (a GRUB boot on a plain machine) skips the Vault, which
+    // needs a disk this hardware may not have.
+    match run_checks(mode != check::CONSOLE) {
         Ok(()) => {
             let _ = user::log("all checks passed");
             user::exit(0)
@@ -110,7 +113,7 @@ fn refused<T>(result: Result<T, user::Refused>, error: Error) -> bool {
 /// far fewer than this; reaching it means the timer never preempted.
 const SPIN_LIMIT: u64 = 100_000_000;
 
-fn run_checks() -> Result<(), &'static str> {
+fn run_checks(use_vault: bool) -> Result<(), &'static str> {
     expect(user::sys::privilege_level() == 3, "privilege level 3")?;
     expect(user::log(MESSAGE).is_ok(), "log")?;
 
@@ -217,9 +220,14 @@ fn run_checks() -> Result<(), &'static str> {
     let _ = user::log("drawbridge over IPC: sealed channel with the supervisor");
 
     // The storage service: open a Drawbridge session with the Vault and
-    // read a file over it — encrypted and authenticated end to end.
-    vault_request()?;
-    let _ = user::log("vault: read, wrote and deleted a file over a sealed Drawbridge channel");
+    // read a file over it — encrypted and authenticated end to end. Skipped
+    // on hardware with no disk (the console boot).
+    if use_vault {
+        vault_request()?;
+        let _ = user::log("vault: read, wrote and deleted a file over a sealed Drawbridge channel");
+    } else {
+        let _ = user::log("vault: skipped on the console boot (no disk assumed)");
+    }
     Ok(())
 }
 
